@@ -29859,8 +29859,7 @@ fn run_headless(
                 break;
             }
             if runtime.vm.halted && runtime.api.native_system.restart.is_some() {
-                runtime.restart()?;
-                continue;
+                runtime.api.run_scheduled_restart();
             }
             if runtime.vm.halted && !runtime.vm.root_returned_with_live_children() {
                 tracing::info!(
