@@ -1202,10 +1202,10 @@ impl RuntimeTraceApi {
             }
             None => (0, next),
         };
-        let (parsed, map) = wrap_parsed_message(markup.clone(), &state);
+        let (parsed, map) = wrap_parsed_message(self.text_font(), markup.clone(), &state);
         self.system92_text_fragment_records = link_fragment_records(&parsed, &state);
         let committed_chars = map.get(page_chars).copied().unwrap_or_default();
-        let (cursor_x, cursor_y) = message_end_cursor(&parsed.text, &state);
+        let (cursor_x, cursor_y) = message_end_cursor(self.text_font(), &parsed.text, &state);
         let cursor = self.surface_text_states.entry(window).or_default();
         cursor.cursor_x = cursor_x;
         cursor.cursor_y = cursor_y;
@@ -1233,12 +1233,8 @@ impl RuntimeTraceApi {
         // `92:9F` stores dword_507650; -1 leaves link glyphs uncoloured.
         let link_color = (self.system92_text_render_override != -1)
             .then(|| (self.system92_text_render_override as u32) & 0x00ff_ffff);
-        let parsed = parse_and_wrap_with_registry(
-            text,
-            state,
-            &mut self.graph_defaults.ruby_registry,
-            link_color,
-        );
+        let parsed = parse_message_markup_with(text, &mut self.graph_defaults.ruby_registry, link_color);
+        let parsed = wrap_parsed_message(self.text_font(), parsed, state).0;
         self.system92_text_fragment_records = link_fragment_records(&parsed, state);
         parsed
     }
@@ -1566,7 +1562,7 @@ impl RuntimeTraceApi {
         let last = lines.last().copied().unwrap_or_default();
         let advance = last
             .chars()
-            .map(|ch| crate::snapshot::glyph_advance(ch, node.size, 100.0))
+            .map(|ch| crate::snapshot::glyph_advance(self.text_font(), ch, node.size, 100.0))
             .sum::<f32>();
         Some(MessageTextEnd {
             window,
@@ -1803,6 +1799,7 @@ impl RuntimeTraceApi {
 
     fn apply_text_to_node(&mut self, target: i32, text: String) {
         let state = self.text_state.clone();
+        let font = self.text_font().cloned();
         let node = self
             .text_nodes
             .entry(target)
@@ -1827,7 +1824,7 @@ impl RuntimeTraceApi {
             node.enabled = true;
             return;
         }
-        node.text = wrap_text_to_state(&text, &state);
+        node.text = wrap_text_to_state(font.as_ref(), &text, &state);
         node.enabled = true;
         node.x = if state.x > 0.0 { state.x } else { 36.0 };
         node.y = if state.y > 0.0 { state.y } else { 520.0 };
@@ -2208,42 +2205,45 @@ impl RuntimeTraceApi {
     }
 }
 
-pub(crate) fn wrap_text_to_state(text: &str, state: &TextState) -> String {
-    wrap_text_to_state_with_map(text, &[], state).0
+pub(crate) fn wrap_text_to_state(font: Option<&ab_glyph::FontArc>, text: &str, state: &TextState) -> String {
+    wrap_text_to_state_with_map(font, text, &[], state).0
 }
 
 pub(crate) fn parse_and_wrap_message(
+    font: Option<&ab_glyph::FontArc>,
     text: &str,
     state: &TextState,
 ) -> (String, Vec<RuntimeRubySpan>) {
-    let parsed = parse_and_wrap_styled_message(text, state);
+    let parsed = parse_and_wrap_styled_message(font, text, state);
     (parsed.text, parsed.ruby_spans)
 }
 
-pub(crate) fn parse_and_wrap_styled_message(text: &str, state: &TextState) -> ParsedMessageMarkup {
-    parse_and_wrap_with_registry(text, state, &mut RubyRegistry::default(), None)
+pub(crate) fn parse_and_wrap_styled_message(font: Option<&ab_glyph::FontArc>, text: &str, state: &TextState) -> ParsedMessageMarkup {
+    parse_and_wrap_with_registry(font, text, state, &mut RubyRegistry::default(), None)
 }
 
 /// Parse message markup against the process-wide ruby registry, then wrap.
 /// Every character index the parser produced is remapped through the wrap so
 /// ruby, style, link and timeline records stay attached to their glyphs.
 pub(crate) fn parse_and_wrap_with_registry(
+    font: Option<&ab_glyph::FontArc>,
     text: &str,
     state: &TextState,
     registry: &mut RubyRegistry,
     link_color: Option<u32>,
 ) -> ParsedMessageMarkup {
     let parsed = parse_message_markup_with(text, registry, link_color);
-    wrap_parsed_message(parsed, state).0
+    wrap_parsed_message(font, parsed, state).0
 }
 
 /// Wrap parsed message text to the window. Returns the map from each
 /// character index of the parsed text to its index in the wrapped text.
 fn wrap_parsed_message(
+    font: Option<&ab_glyph::FontArc>,
     parsed: ParsedMessageMarkup,
     state: &TextState,
 ) -> (ParsedMessageMarkup, Vec<usize>) {
-    let (wrapped, map) = wrap_text_to_state_with_map(&parsed.text, &parsed.ruby_spans, state);
+    let (wrapped, map) = wrap_text_to_state_with_map(font, &parsed.text, &parsed.ruby_spans, state);
     let ruby_spans = parsed
         .ruby_spans
         .into_iter()
@@ -2366,13 +2366,13 @@ fn append_message_markup(
 
 /// Where the text cursor stands after `text` (wrapped) is drawn from the
 /// state's origin, measured with the advances text is drawn with.
-fn message_end_cursor(text: &str, state: &TextState) -> (i32, i32) {
+fn message_end_cursor(font: Option<&ab_glyph::FontArc>, text: &str, state: &TextState) -> (i32, i32) {
     let row = text.matches('\n').count();
     let last_line = text.rsplit('\n').next().unwrap_or_default();
     let size = state.font_size.max(1.0);
     let advance: f32 = last_line
         .chars()
-        .map(|ch| crate::snapshot::glyph_advance(ch, size, 100.0))
+        .map(|ch| crate::snapshot::glyph_advance(font, ch, size, 100.0))
         .sum();
     (
         (state.x + advance).round() as i32,
@@ -2422,13 +2422,14 @@ fn link_fragment_records(
 /// never starts a new line: it stays at the end of the line it follows. A
 /// word longer than a whole line breaks by glyph.
 fn wrap_text_to_state_with_map(
+    font: Option<&ab_glyph::FontArc>,
     text: &str,
     protected_spans: &[RuntimeRubySpan],
     state: &TextState,
 ) -> (String, Vec<usize>) {
     let size = state.font_size.max(1.0);
     let bound = state.width.max(120.0);
-    let advance = |ch: char| crate::snapshot::glyph_advance(ch, size, 100.0);
+    let advance = |ch: char| crate::snapshot::glyph_advance(font, ch, size, 100.0);
     let max_lines = ((state.height.max(state.line_height) / state.line_height.max(1.0)).floor()
         as usize)
         .max(1);
@@ -2638,26 +2639,26 @@ mod tests {
         // Wonderful Everyday's message window moves a word that doesn't fit
         // to the next line; it was cut after its first letters.
         assert_eq!(
-            wrap_text_to_state("aaaa bbbb cccc dd eeeeee ff", &latin_text_state()),
+            wrap_text_to_state(None, "aaaa bbbb cccc dd eeeeee ff", &latin_text_state()),
             "aaaa bbbb cccc dd \neeeeee ff"
         );
         // A word must end one font height (20 px) before the edge...
         assert_eq!(
-            wrap_text_to_state("aaaa bbbb cccc dddd eeee", &latin_text_state()),
+            wrap_text_to_state(None, "aaaa bbbb cccc dddd eeee", &latin_text_state()),
             "aaaa bbbb cccc \ndddd eeee"
         );
         assert_eq!(
-            wrap_text_to_state("aaaa bbbb cccc ddd eeee", &latin_text_state()),
+            wrap_text_to_state(None, "aaaa bbbb cccc ddd eeee", &latin_text_state()),
             "aaaa bbbb cccc ddd \neeee"
         );
         // ...unless it ends in hanging punctuation.
         assert_eq!(
-            wrap_text_to_state("aaaa bbbb cccc dddd! eeee", &latin_text_state()),
+            wrap_text_to_state(None, "aaaa bbbb cccc dddd! eeee", &latin_text_state()),
             "aaaa bbbb cccc dddd! \neeee"
         );
         // Apostrophes and punctuation belong to their word.
         assert_eq!(
-            wrap_text_to_state("aaaa bbbb cccc dd ee\u{2019}e.", &latin_text_state()),
+            wrap_text_to_state(None, "aaaa bbbb cccc dd ee\u{2019}e.", &latin_text_state()),
             "aaaa bbbb cccc dd \nee\u{2019}e."
         );
     }
@@ -2679,17 +2680,17 @@ mod tests {
         let first = format!("aaaa{}", " aaaa".repeat(14));
         assert_eq!(first.len(), 74);
         assert_eq!(
-            wrap_text_to_state(&format!("{first} bbbb cc dddddd."), &state),
+            wrap_text_to_state(None, &format!("{first} bbbb cc dddddd."), &state),
             format!("{first} \nbbbb cc dddddd.")
         );
         let single = format!("{first} bbb");
-        assert_eq!(wrap_text_to_state(&single, &state), single);
+        assert_eq!(wrap_text_to_state(None, &single, &state), single);
     }
 
     #[test]
     fn a_word_longer_than_a_line_wraps_by_glyph() {
         assert_eq!(
-            wrap_text_to_state(&"a".repeat(25), &latin_text_state()),
+            wrap_text_to_state(None, &"a".repeat(25), &latin_text_state()),
             format!("{}\n{}", "a".repeat(20), "a".repeat(5))
         );
     }
@@ -2697,7 +2698,7 @@ mod tests {
     #[test]
     fn wrapping_keeps_target_line_start_punctuation_with_its_predecessor() {
         assert_eq!(
-            wrap_text_to_state("甲乙丙丁戊己庚辛。壬", &narrow_text_state()),
+            wrap_text_to_state(None, "甲乙丙丁戊己庚辛。壬", &narrow_text_state()),
             "甲乙丙丁戊己庚\n辛。壬"
         );
     }
@@ -2705,7 +2706,7 @@ mod tests {
     #[test]
     fn wrapping_does_not_leave_an_opening_bracket_at_line_end() {
         assert_eq!(
-            wrap_text_to_state("甲乙丙丁戊己庚「辛壬", &narrow_text_state()),
+            wrap_text_to_state(None, "甲乙丙丁戊己庚「辛壬", &narrow_text_state()),
             "甲乙丙丁戊己庚\n「辛壬"
         );
     }
@@ -2713,7 +2714,7 @@ mod tests {
     #[test]
     fn wrapping_moves_a_ruby_base_as_one_target_text_fragment() {
         let (text, spans) =
-            parse_and_wrap_message("甲乙丙丁戊己庚<Rしんじん>辛壬</R>癸", &narrow_text_state());
+            parse_and_wrap_message(None, "甲乙丙丁戊己庚<Rしんじん>辛壬</R>癸", &narrow_text_state());
         assert_eq!(text, "甲乙丙丁戊己庚\n辛壬癸");
         assert_eq!(spans.len(), 1);
         assert_eq!((spans[0].start_char, spans[0].end_char), (8, 10));
@@ -2723,7 +2724,7 @@ mod tests {
     #[test]
     fn wrapping_remaps_target_style_spans_across_inserted_newlines() {
         let parsed =
-            parse_and_wrap_styled_message("甲乙丙丁戊己庚<b>辛壬</b>癸", &narrow_text_state());
+            parse_and_wrap_styled_message(None, "甲乙丙丁戊己庚<b>辛壬</b>癸", &narrow_text_state());
         assert_eq!(parsed.text, "甲乙丙丁戊己庚辛\n壬癸");
         assert_eq!(parsed.style_spans.len(), 1);
         assert_eq!(
@@ -2740,12 +2741,10 @@ mod tests {
     fn registry_ruby_wraps_as_one_fragment_like_a_tag_ruby() {
         let mut registry = RubyRegistry::default();
         registry.register("辛壬", "しんじん", false);
-        let parsed = parse_and_wrap_with_registry(
-            "甲乙丙丁戊己庚辛壬癸",
-            &narrow_text_state(),
-            &mut registry,
-            None,
-        );
+        let parsed = parse_and_wrap_with_registry(None, "甲乙丙丁戊己庚辛壬癸",
+        &narrow_text_state(),
+        &mut registry,
+        None,);
         assert_eq!(parsed.text, "甲乙丙丁戊己庚\n辛壬癸");
         assert_eq!(parsed.ruby_spans.len(), 1);
         assert_eq!(
@@ -2759,12 +2758,10 @@ mod tests {
 
     #[test]
     fn wrapping_remaps_link_and_timeline_records_across_inserted_newlines() {
-        let parsed = parse_and_wrap_with_registry(
-            "甲乙丙丁戊己庚<t 3><l>辛壬</l><ev 5>癸",
-            &narrow_text_state(),
-            &mut RubyRegistry::default(),
-            None,
-        );
+        let parsed = parse_and_wrap_with_registry(None, "甲乙丙丁戊己庚<t 3><l>辛壬</l><ev 5>癸",
+        &narrow_text_state(),
+        &mut RubyRegistry::default(),
+        None,);
         assert_eq!(parsed.text, "甲乙丙丁戊己庚辛\n壬癸");
         assert_eq!(
             (

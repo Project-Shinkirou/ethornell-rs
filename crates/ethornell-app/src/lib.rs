@@ -27721,7 +27721,7 @@ impl ethornell_vm::GraphApi for RuntimeTraceApi {
                             .or_default()
                             .push_str(&drawn);
                     } else {
-                        let parsed = text::parse_and_wrap_styled_message(text, &state);
+                        let parsed = text::parse_and_wrap_styled_message(self.text_font(), text, &state);
                         self.surface_text_buffers
                             .entry(target)
                             .or_default()

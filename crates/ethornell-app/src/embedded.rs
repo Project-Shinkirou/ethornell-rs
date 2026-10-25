@@ -155,15 +155,14 @@ impl Embedded {
         let bytes = manager.read_decoded_from_archive("system.arc", "ipl._bp")?;
         check_cancelled()?;
         let native_root = game_root_path(&manager);
-        let mut runtime = RuntimeEngine::new("system.arc:ipl._bp", &bytes, manager, native_root, trace, fail_on_stub, true);
-        runtime.vm.set_graph_text_encoding(display.text_encoding.encoding());
+        let mut runtime = RuntimeEngine::new("system.arc:ipl._bp", &bytes, manager, native_root, trace, fail_on_stub, true, display.text_encoding.encoding());
         runtime.api.display_encoding = display.text_encoding;
         runtime.api.display_font = font.clone();
         check_cancelled()?;
         let width = runtime.api.screen_width.max(1) as u32;
         let height = runtime.api.screen_height.max(1) as u32;
         let renderer = pollster::block_on(Renderer::offscreen(width, height, font))?;
-        runtime.api.graphics_memory_metric = renderer.graphics_memory_metric();
+        runtime.api.display_adapter_description = renderer.adapter_name().to_owned();
         check_cancelled()?;
         let audio = AudioSystem::new()?;
         check_cancelled()?;
@@ -260,8 +259,9 @@ impl Embedded {
         let elapsed = now.saturating_duration_since(self.last_frame).as_millis().min(u64::MAX as u128) as u64;
         self.last_frame = now;
         if self.is_paused() { return Ok(None); }
+        let elapsed_ms = if self.runtime.api.engine_clock_frozen { 0 } else { elapsed };
         let report = runtime_frontend::drive_runtime_frame(&mut self.runtime, &mut self.input, &mut None,
-            RuntimeFramePacing, normalize_engine_elapsed_ms(elapsed), elapsed, Some(&mut self.audio), "embedded");
+            RuntimeFramePacing, elapsed_ms, elapsed, Some(&mut self.audio), "embedded");
         if let Some(error) = DIALOG.with(|slot| slot.borrow_mut().as_mut().and_then(|bridge| bridge.error.take())) {
             return Err(EthornellError::Other(error));
         }
