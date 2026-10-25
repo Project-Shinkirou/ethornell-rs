@@ -4,6 +4,8 @@
 
 The embedded frontend uses upstream's shared `frame_presenter` and refactored wgpu renderer, including gamma-space composition, text effects and frame budgets. Offscreen capture, explicit per-runtime fonts and encodings, host modal services, live child-thread completion and decoder-owned shutdown remain integrated.
 
+Message wrapping, ruby spans, continued-page cursors and caret placement pass the selected runtime font through the upstream layout helpers. Embedded bootstrap supplies its display encoding to the new runtime constructor and leaves native clock-jump filtering to the engine, including clock-freeze sections.
+
 # Native display localization
 
 The Shinki ABI exposes three per-game fields:
