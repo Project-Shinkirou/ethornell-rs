@@ -10525,7 +10525,7 @@ mod input_tests {
     fn runtime_with_code(code: &[u8]) -> super::RuntimeEngine {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let manager = ethornell_archive::ResourceManager::open_game(&root).unwrap();
-        super::RuntimeEngine::new("test:exit._bp", code, manager, root, false, false, false)
+        super::RuntimeEngine::new("test:exit._bp", code, manager, root, false, false, false, encoding_rs::SHIFT_JIS)
     }
 
     #[test]
