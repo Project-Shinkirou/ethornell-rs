@@ -9570,6 +9570,11 @@ impl RuntimeEngine {
                 let mut api = RuntimeTraceApi::new_with_native_root(manager, native_root);
                 api.configure_native_sound_channels(profile.se_channels);
                 api.native_dialog_presentation = native_dialog_presentation;
+                api.display_encoding = if encoding == encoding_rs::GBK {
+                    localization::DisplayEncoding::Gbk
+                } else {
+                    localization::DisplayEncoding::Cp932
+                };
                 api
             },
             options: ethornell_vm::VmRunOptions {
