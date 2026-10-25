@@ -413,6 +413,7 @@ pub(crate) fn is_empty_archive_arg(archive: &str) -> bool {
 mod tests {
     use super::*;
 
+
     fn temporary_root(name: &str) -> PathBuf {
         let unique = format!(
             "ethornell-{name}-{}-{}",
@@ -754,5 +755,34 @@ mod tests {
             Some(archive)
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn game_root_is_exposed_as_an_absolute_user_data_root() {
+        let root = temporary_root("absolute-user-root");
+        let manager = ResourceManager::open_game(&root).unwrap();
+        let path = game_root_path(&manager);
+        assert!(path.is_absolute());
+        assert_eq!(
+            std::fs::canonicalize(path).unwrap(),
+            std::fs::canonicalize(&root).unwrap()
+        );
+        drop(manager);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn get_user_data_root_paths_resolve_as_loose_files() {
+        let root = temporary_root("loose-user-root");
+        std::fs::create_dir(root.join("UserData")).unwrap();
+        let file = root.join("UserData/slot.sud");
+        std::fs::write(&file, b"public save").unwrap();
+        let manager = ResourceManager::open_game(&root).unwrap();
+        assert_eq!(
+            read_runtime_bytes(&manager, "", &file.to_string_lossy()),
+            Some(b"public save".to_vec())
+        );
+        drop(manager);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

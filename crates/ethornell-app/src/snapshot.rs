@@ -349,6 +349,7 @@ pub(crate) fn compose_runtime_frame_through_priority(
                     .and_then(|surface| api.surface_chain_clip(surface));
                 draw_text_node(
                     &mut out,
+                    api.text_font(),
                     &positioned,
                     api.formatted_text_layout(&positioned),
                     api.text_node_shadow(&positioned),
@@ -524,6 +525,7 @@ pub(crate) fn compose_graph_object(
             });
         draw_text_node(
             &mut out,
+            api.text_font(),
             &positioned,
             api.formatted_text_layout(&positioned),
             api.text_node_shadow(&positioned),
@@ -640,6 +642,7 @@ fn capture_draw_item(
 
 pub(crate) fn draw_text_node(
     dst: &mut DecodedImage,
+    selected_font: Option<&FontArc>,
     node: &crate::text::RuntimeTextNode,
     layout: crate::text::RuntimeFormattedTextLayout,
     shadow: TextNodeShadow,
@@ -651,11 +654,11 @@ pub(crate) fn draw_text_node(
     {
         return;
     }
-    check_session_coverage(&node.text);
-    let Some(font) = snapshot_font() else {
+    let Some(font) = selected_font else {
         draw_fallback_text(dst, node, clip);
         return;
     };
+    check_font_coverage(font, node.text.chars());
     let (default_shadow, message_effect) = match shadow {
         TextNodeShadow::Default(shadow) => (shadow, None),
         TextNodeShadow::Message(effect) => (None, effect),
@@ -694,6 +697,7 @@ pub(crate) fn draw_text_node(
             };
             rasterize_placed_glyph_records(
                 dst,
+                Some(font),
                 1,
                 &[placed],
                 node.size.max(12.0),
@@ -812,15 +816,6 @@ fn resolve_text_shadow(
     ))
 }
 
-fn snapshot_font() -> Option<FontArc> {
-    // Never perform filesystem IO in a glyph/measurement hot path. Production
-    // frontends initialize a session explicitly; unscoped calls are diagnostic.
-    let font = SESSION_FONT.with(|s| s.borrow().clone());
-    if font.is_none() {
-        record_raster_error("CPU font session not initialized");
-    }
-    font
-}
 
 /// Rasterize the target's direct bitmap-text path into an existing RGBA
 /// bitmap. Unlike `draw_text_node`, this routine intentionally has no
@@ -829,6 +824,7 @@ fn snapshot_font() -> Option<FontArc> {
 /// advances only on explicit newlines.
 pub(crate) fn rasterize_bitmap_text(
     dst: &mut DecodedImage,
+    selected_font: Option<&FontArc>,
     text: &str,
     start_x: i32,
     start_y: i32,
@@ -847,7 +843,7 @@ pub(crate) fn rasterize_bitmap_text(
         record_raster_error("non-finite CPU bitmap text spacing/scale");
         return (start_x, start_y);
     }
-    check_session_coverage(text);
+    if let Some(font) = selected_font { check_font_coverage(font, text.chars()); }
     let size = size.max(1.0);
     let horizontal_scale = if horizontal_scale_percent > 0.0 {
         horizontal_scale_percent / 100.0
@@ -858,7 +854,7 @@ pub(crate) fn rasterize_bitmap_text(
     let mut x = start_x as f32;
     let mut line_y = start_y as f32;
 
-    let Some(font) = snapshot_font() else {
+    let Some(font) = selected_font else {
         let char_w = (size * 0.55).max(1.0);
         let char_h = (size * 0.85).max(1.0) as i32;
         for ch in text.chars() {
@@ -922,6 +918,8 @@ pub(crate) struct DirectTextGlyph {
 /// Returns the glyphs and the accumulated advance.
 pub(crate) fn layout_direct_bitmap_text(
     bytes: &[u8],
+    selected_font: Option<&FontArc>,
+    encoding: crate::localization::DisplayEncoding,
     start_x: i32,
     start_y: i32,
     size: u32,
@@ -945,8 +943,7 @@ pub(crate) fn layout_direct_bitmap_text(
     let mut allocated = 0usize;
     while index < bytes.len() && bytes[index] != 0 {
         let lead = bytes[index];
-        // sub_42FA80: 0x80..0x9F and 0xE0..0xFF lead a double-byte code.
-        let double = lead >= 0x80 && !(0xA0..0xE0).contains(&lead);
+        let double = encoding.is_lead_byte(lead);
         let code = if double {
             (u32::from(lead) << 8) | u32::from(bytes.get(index + 1).copied().unwrap_or(0))
         } else {
@@ -971,7 +968,7 @@ pub(crate) fn layout_direct_bitmap_text(
                 record_raster_error("direct text cell budget exceeded");
                 return (Vec::new(), 0);
             }
-            let ink = direct_text_glyph_cell(code, size, bold);
+            let ink = direct_text_glyph_cell(code, size, bold, selected_font, encoding);
             if ink.is_empty() && size != 0 {
                 return (Vec::new(), 0);
             }
@@ -1020,6 +1017,7 @@ pub(crate) fn layout_direct_bitmap_text(
 /// percentage, bold is Boolean, the ninth operand selects proportional cells,
 /// and the tenth is packed RGB. Wrapping reserves one full cell at the right.
 pub(crate) fn layout_styled_bitmap_text(
+    selected_font: Option<&FontArc>, encoding: crate::localization::DisplayEncoding,
     bytes:&[u8],origin:[i32;2],size:u32,width_percent:i32,bold:bool,
     proportional:bool,packed_rgb:u32,wrap:bool,line_pitch_percent:i32,bitmap:[u32;2]
 )->(Vec<DirectTextGlyph>,i32) {
@@ -1029,14 +1027,14 @@ pub(crate) fn layout_styled_bitmap_text(
     let full=(size as i32).wrapping_mul(width_percent)/100;
     let right=bitmap[0].wrapping_sub(full as u32);
     let line_step=(size as i32).wrapping_add((size as i32).wrapping_mul(line_pitch_percent)/100);
-    let font=snapshot_font();let rgb=[(packed_rgb>>16) as u8,(packed_rgb>>8) as u8,packed_rgb as u8];
+    let font=selected_font;let rgb=[(packed_rgb>>16) as u8,(packed_rgb>>8) as u8,packed_rgb as u8];
     let mut allocated=0usize;
     while index<bytes.len() && bytes[index]!=0 {
-        let lead=bytes[index];let double=lead>=0x80&&!(0xA0..0xE0).contains(&lead);
+        let lead=bytes[index];let double=encoding.is_lead_byte(lead);
         let n=if double {2}else{1};let end=(index+n).min(bytes.len());
-        let text=encoding_rs::SHIFT_JIS.decode(&bytes[index..end]).0.into_owned();let ch=text.chars().next().unwrap_or('\0');index=end;
+        let text=encoding.encoding().decode(&bytes[index..end]).0.into_owned();let ch=text.chars().next().unwrap_or('\0');index=end;
         if lead==10 {lines=lines.wrapping_add(1);x=origin[0];y=y.wrapping_add(line_step);hanging=false;if !wrap {maximum=maximum.max(result);result=0;}continue;}
-        check_session_coverage(&text);
+        if let Some(font)=font { check_font_coverage(font, text.chars()); }
         let nominal=if double {full}else{full/2};
         let Some(mut cell)=new_raster((2*full).max(1) as u32,size) else{return (Vec::new(),0);};
         allocated=allocated.saturating_add(cell.rgba.len());if allocated>MAX_RASTER_BYTES {record_raster_error("styled text cell budget exceeded");return (Vec::new(),0);}
@@ -1079,25 +1077,25 @@ pub(crate) fn layout_styled_bitmap_text(
 /// sub_42F790: draw one code with TextOut at (0, 0) into the font's
 /// monochrome `size` x `size` DIB. 0x7F is drawn as U+2014 and 0xEF40 as
 /// two U+2014; other codes at or above 0xEF40 draw nothing.
-fn direct_text_glyph_cell(code: u32, size: u32, bold: bool) -> Vec<bool> {
+fn direct_text_glyph_cell(code: u32, size: u32, bold: bool, selected_font: Option<&FontArc>, encoding: crate::localization::DisplayEncoding) -> Vec<bool> {
     if !valid_text_raster(size as f32, 1) {
         return Vec::new();
     }
     let mut ink = vec![false; (size * size) as usize];
     let text: String = match code {
-        0x7F => "\u{2014}".into(),
-        0xEF40 => "\u{2014}\u{2014}".into(),
-        c if c >= 0xEF40 => return ink,
-        c if c < 0x100 => encoding_rs::SHIFT_JIS.decode(&[c as u8]).0.into_owned(),
-        c => encoding_rs::SHIFT_JIS
+        0x7F if encoding == crate::localization::DisplayEncoding::Cp932 => "\u{2014}".into(),
+        0xEF40 if encoding == crate::localization::DisplayEncoding::Cp932 => "\u{2014}\u{2014}".into(),
+        c if c >= 0xEF40 && encoding == crate::localization::DisplayEncoding::Cp932 => return ink,
+        c if c < 0x100 => encoding.encoding().decode(&[c as u8]).0.into_owned(),
+        c => encoding.encoding()
             .decode(&[(c >> 8) as u8, c as u8])
             .0
             .into_owned(),
     };
-    check_session_coverage(&text);
-    let Some(font) = snapshot_font() else {
+    let Some(font) = selected_font else {
         return ink;
     };
+    check_font_coverage(font, text.chars());
     let scale = PxScale::from(size as f32);
     let scaled = font.as_scaled(scale);
     let mut pen = 0.0_f32;
@@ -1130,18 +1128,18 @@ fn direct_text_glyph_cell(code: u32, size: u32, bold: bool) -> Vec<bool> {
 }
 
 /// Horizontal advance of one glyph, scaled by the horizontal percentage.
-pub(crate) fn glyph_advance(ch: char, size: f32, horizontal_scale_percent: f32) -> f32 {
+pub(crate) fn glyph_advance(selected_font: Option<&FontArc>, ch: char, size: f32, horizontal_scale_percent: f32) -> f32 {
     if !valid_text_raster(size, 1) {
         return 0.0;
     }
-    check_session_coverage(&ch.to_string());
+    if let Some(font) = selected_font { check_font_coverage(font, [ch]); }
     let scale = if horizontal_scale_percent > 0.0 {
         horizontal_scale_percent / 100.0
     } else {
         1.0
     };
     let size = size.max(1.0);
-    let base = match snapshot_font() {
+    let base = match selected_font {
         Some(font) => font
             .as_scaled(PxScale::from(size))
             .h_advance(font.glyph_id(ch))
@@ -1156,6 +1154,7 @@ pub(crate) fn glyph_advance(ch: char, size: f32, horizontal_scale_percent: f32) 
 /// override the colour of a character (markup colour spans).
 pub(crate) fn rasterize_placed_glyphs(
     dst: &mut DecodedImage,
+    selected_font: Option<&FontArc>,
     glyphs: &[crate::text_layout::PlacedGlyph],
     size: f32,
     color: [f32; 4],
@@ -1166,8 +1165,8 @@ pub(crate) fn rasterize_placed_glyphs(
     }
     let size = size.max(1.0);
     let scale = PxScale::from(size);
-    let font = snapshot_font();
-    if let Some(font) = font.as_ref() {
+    let font = selected_font;
+    if let Some(font) = font {
         check_font_coverage(font, glyphs.iter().map(|glyph| glyph.ch));
     }
     for glyph in glyphs {
@@ -1265,6 +1264,7 @@ fn glyph_cell(
 /// coverage within (dx, dy) (sub_433180).
 pub(crate) fn rasterize_placed_glyph_records(
     dst: &mut DecodedImage,
+    selected_font: Option<&FontArc>,
     dst_format: i32,
     glyphs: &[crate::text_layout::PlacedGlyph],
     size: f32,
@@ -1275,8 +1275,8 @@ pub(crate) fn rasterize_placed_glyph_records(
     if !valid_raster(dst) || !valid_text_raster(size, glyphs.len()) {
         return;
     }
-    let Some(font) = snapshot_font() else {
-        rasterize_placed_glyphs(dst, glyphs, size, color, color_of);
+    let Some(font) = selected_font else {
+        rasterize_placed_glyphs(dst, None, glyphs, size, color, color_of);
         return;
     };
     check_font_coverage(&font, glyphs.iter().map(|glyph| glyph.ch));
@@ -1362,16 +1362,16 @@ pub(crate) fn rasterize_placed_glyph_records(
     }
 }
 
-pub(crate) fn measure_text_advance(text: &str, size: f32, spacing: f32) -> i32 {
+pub(crate) fn measure_text_advance(selected_font: Option<&FontArc>, text: &str, size: f32, spacing: f32) -> i32 {
     if !valid_text_raster(size, text.chars().count()) {
         return 0;
     }
-    check_session_coverage(text);
+    if let Some(font) = selected_font { check_font_coverage(font, text.chars()); }
     let glyph_count = text.chars().count();
     if glyph_count == 0 {
         return 0;
     }
-    let width = if let Some(font) = snapshot_font() {
+    let width = if let Some(font) = selected_font {
         let scaled = font.as_scaled(PxScale::from(size.max(1.0)));
         text.chars()
             .map(|character| scaled.h_advance(font.glyph_id(character)))
@@ -1886,12 +1886,6 @@ mod font_session_tests {
         let before = SESSION_FONT.with(|font| font.borrow().is_some());
         {
             let _session = enter_font_session(&font);
-            for _ in 0..100 {
-                assert_eq!(
-                    glyph_advance('A', 20.0, 100.0),
-                    glyph_advance('A', 20.0, 100.0)
-                );
-            }
             assert!(take_raster_error().is_none());
             check_session_coverage("\u{10ffff}");
             record_raster_error("outer");
@@ -1916,14 +1910,14 @@ mod font_session_tests {
         let font = ethornell_render::FontProvider::load_system_cjk_font().expect("system CJK font");
         let incomplete = missing_font(&font);
         with_font(&incomplete, || {
-            direct_text_glyph_cell(u32::from(b'A'), 20, false);
+            direct_text_glyph_cell(u32::from(b'A'), 20, false, Some(&incomplete), crate::localization::DisplayEncoding::Cp932);
             assert!(take_missing_glyphs());
-            glyph_advance('A', 20.0, 100.0);
+            glyph_advance(Some(&incomplete), 'A', 20.0, 100.0);
             assert!(take_missing_glyphs());
         });
         with_font(&font, || {
             let mut image = new_raster(40, 40).unwrap();
-            rasterize_bitmap_text(&mut image, "\u{10ffff}", 0, 0, 20.0, 0.0, 100.0, [1.0; 4]);
+            rasterize_bitmap_text(&mut image, Some(&font), "\u{10ffff}", 0, 0, 20.0, 0.0, 100.0, [1.0; 4]);
             assert!(take_missing_glyphs());
             let node = crate::text::RuntimeTextNode {
                 text: "\u{10ffff}".into(),
@@ -1943,6 +1937,7 @@ mod font_session_tests {
             };
             draw_text_node(
                 &mut image,
+                Some(&font),
                 &node,
                 crate::text::RuntimeFormattedTextLayout::plain(&node),
                 TextNodeShadow::Default(None),
@@ -1955,11 +1950,11 @@ mod font_session_tests {
                 x: 0.0,
                 y: 0.0,
             };
-            rasterize_placed_glyphs(&mut image, &[glyph], 20.0, [1.0; 4], &|_| None);
+            rasterize_placed_glyphs(&mut image, Some(&font), &[glyph], 20.0, [1.0; 4], &|_| None);
             assert!(take_missing_glyphs());
         });
         with_font(&font, || {
-            glyph_advance('A', 20.0, 100.0);
+            glyph_advance(Some(&font), 'A', 20.0, 100.0);
             assert!(
                 !take_missing_glyphs(),
                 "previous session must not poison this font"
@@ -1972,10 +1967,10 @@ mod font_session_tests {
         assert!(raster_byte_len(u32::MAX, u32::MAX).is_err());
         assert!(new_raster(u32::MAX, u32::MAX).is_none());
         assert!(take_raster_error().is_some());
-        assert!(direct_text_glyph_cell(65, u32::MAX, false).is_empty());
+        assert!(direct_text_glyph_cell(65, u32::MAX, false, None, crate::localization::DisplayEncoding::Cp932).is_empty());
         assert!(take_raster_error().is_some());
         assert!(
-            layout_direct_bitmap_text(b"A", i32::MAX, i32::MAX, u32::MAX, false, i32::MAX, 0, 1, 1)
+            layout_direct_bitmap_text(b"A", None, crate::localization::DisplayEncoding::Cp932, i32::MAX, i32::MAX, u32::MAX, false, i32::MAX, 0, 1, 1)
                 .0
                 .is_empty()
         );
@@ -2204,6 +2199,7 @@ mod styled_text_snapshot_tests {
 
         draw_text_node(
             &mut image,
+            Some(&font),
             &node,
             layout,
             TextNodeShadow::Message(Some(glow)),
@@ -2249,13 +2245,8 @@ mod styled_text_snapshot_tests {
             height: 64,
             rgba: vec![0; 128 * 64 * 4],
         };
-        draw_text_node(
-            &mut image,
-            &node,
-            layout,
-            TextNodeShadow::Default(None),
-            None,
-        );
+        let font = super::load_default_font().unwrap();
+        draw_text_node(&mut image, Some(&font), &node, layout, TextNodeShadow::Default(None), None);
         assert!(
             image
                 .rgba
@@ -2291,7 +2282,8 @@ mod glyph_record_tests {
             x: 5.0,
             y: 5.0,
         };
-        rasterize_placed_glyph_records(&mut image, 2, &[glyph], 20.0, [1.0; 4], &|_| None, shadow);
+        let font = super::load_default_font();
+        rasterize_placed_glyph_records(&mut image, font.as_ref(), 2, &[glyph], 20.0, [1.0; 4], &|_| None, shadow);
         image
     }
 
@@ -2364,14 +2356,14 @@ mod direct_bitmap_text_tests {
     #[test]
     fn cells_are_fixed_width_and_stop_at_the_first_invisible_glyph() {
         let (glyphs, advance) =
-            layout_direct_bitmap_text(&sjis("あa"), 0, 0, 12, false, 1, 0xFFFFFF, 100, 20);
+            layout_direct_bitmap_text(&sjis("あa"), None, crate::localization::DisplayEncoding::Cp932, 0, 0, 12, false, 1, 0xFFFFFF, 100, 20);
         assert_eq!(glyphs.len(), 2);
         assert_eq!((glyphs[0].x, glyphs[0].cell.width), (0, 12));
         assert_eq!((glyphs[1].x, glyphs[1].cell.width), (13, 6));
         assert_eq!(advance, 13 + 7);
         // The third glyph starts at x=30, past a 30-pixel bitmap: stop.
         let (glyphs, advance) =
-            layout_direct_bitmap_text(&sjis("あいう"), 0, 0, 12, false, 3, 0xFFFFFF, 30, 20);
+            layout_direct_bitmap_text(&sjis("あいう"), None, crate::localization::DisplayEncoding::Cp932, 0, 0, 12, false, 3, 0xFFFFFF, 30, 20);
         assert_eq!(glyphs.len(), 2);
         assert_eq!(advance, 30);
     }
@@ -2379,19 +2371,30 @@ mod direct_bitmap_text_tests {
     #[test]
     fn control_codes_wrap_and_set_the_line_pitch() {
         let (glyphs, _) =
-            layout_direct_bitmap_text(&sjis("\u{4}あいう"), 0, 0, 12, false, 0, 0, 30, 60);
+            layout_direct_bitmap_text(&sjis("\u{4}あいう"), None, crate::localization::DisplayEncoding::Cp932, 0, 0, 12, false, 0, 0, 30, 60);
         assert_eq!((glyphs[2].x, glyphs[2].y), (0, 12));
         let mut bytes = vec![3, 150];
         bytes.extend(sjis("あ\nあ"));
-        let (glyphs, _) = layout_direct_bitmap_text(&bytes, 5, 0, 12, false, 0, 0, 40, 80);
+        let (glyphs, _) = layout_direct_bitmap_text(&bytes, None, crate::localization::DisplayEncoding::Cp932, 5, 0, 12, false, 0, 0, 40, 80);
         assert_eq!((glyphs[1].x, glyphs[1].y), (5, 18));
     }
 
     #[test]
     fn angle_brackets_are_glyphs_not_markup() {
         let (glyphs, advance) =
-            layout_direct_bitmap_text(b"<b>x</b>", 0, 0, 12, false, 0, 0, 80, 20);
+            layout_direct_bitmap_text(b"<b>x</b>", None, crate::localization::DisplayEncoding::Cp932, 0, 0, 12, false, 0, 0, 80, 20);
         assert_eq!(glyphs.len(), 8);
         assert_eq!(advance, 48);
+    }
+
+    #[test]
+    fn gbk_double_byte_cells_do_not_become_cp932_halfwidth_pairs() {
+        let (glyphs, advance) = layout_direct_bitmap_text(
+            b"\xD6\xD0\xCE\xC4", None, crate::localization::DisplayEncoding::Gbk,
+            0, 0, 12, false, 0, 0xFFFFFF, 80, 20,
+        );
+        assert_eq!(glyphs.len(), 2);
+        assert!(glyphs.iter().all(|glyph| glyph.cell.width == 12));
+        assert_eq!(advance, 24);
     }
 }

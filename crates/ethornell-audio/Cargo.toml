@@ -17,4 +17,4 @@ symphonia = { version = "0.5.5", default-features = false, features = ["mp2"] }
 [target.'cfg(not(any(target_os="vita",target_os="horizon")))'.dependencies]
 kira.workspace = true
 [target.'cfg(any(target_os="vita",target_os="horizon"))'.dependencies]
-kira = { version = "0.8", default-features = false, features = ["mp3", "ogg", "flac", "wav"] }
+kira = { git = "https://github.com/Project-Shinkirou/kira.git", rev = "da8668fcd5e543eec2e9ea9871b310276e09fdc5", default-features = false, features = ["mp3", "ogg", "flac", "wav"] }

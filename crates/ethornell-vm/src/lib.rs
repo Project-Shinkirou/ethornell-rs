@@ -2368,6 +2368,13 @@ pub struct Vm {
     pub(crate) target_heap: target_heap::TargetHeap,
     heap_free_blocks: Vec<(u32, u32)>,
     pub halted: bool,
+    /// Native thread status 6 (Sys80:6A / Sys80:E1) was returned by this
+    /// interpreter or one of its child CThreads. `sub_48C990` tears the whole
+    /// game down on that status.
+    interpreter_terminated: bool,
+    /// The root CThread executed `ret` without a caller frame (native status
+    /// 4). Only this thread ends; child CThreads keep running.
+    thread_ended: bool,
     pub calls: BTreeMap<String, usize>,
     pub stubs: BTreeMap<String, usize>,
     program_cache: BTreeMap<String, usize>,
@@ -2696,6 +2703,23 @@ impl Vm {
         self.run_loaded(api, options)
     }
 
+    /// Whether the whole game has ended as in native `sub_48C990`: a CThread
+    /// returned status 6 (Sys80:6A / Sys80:E1), or the root CThread returned
+    /// without a caller frame and no child CThread remains.
+    pub fn game_ended(&self) -> bool {
+        self.interpreter_terminated || (self.thread_ended && !self.has_live_child_threads())
+    }
+
+    /// The root CThread returned normally (status 4) while child CThreads are
+    /// still scheduled; the game keeps running until they finish.
+    pub fn root_returned_with_live_children(&self) -> bool {
+        self.thread_ended && !self.interpreter_terminated && self.has_live_child_threads()
+    }
+
+    fn has_live_child_threads(&self) -> bool {
+        self.async_tasks.iter().any(|task| !task.is_completed())
+    }
+
     pub fn start(&mut self, program: &BpProgram) {
         self.start_execution(program, true);
     }
@@ -2732,6 +2756,8 @@ impl Vm {
         self.program_free_stack.clear();
         self.mediation_programs.clear();
         self.halted = false;
+        self.interpreter_terminated = false;
+        self.thread_ended = false;
         self.scheduler_signal = None;
         self.scheduler_switch_target = None;
         self.thread.reset_execution();
@@ -2794,7 +2820,8 @@ impl Vm {
         let trace_message_loop = debug::trace_msgwnd_enabled();
         let trace_events =
             std::env::var_os("TRACE_VM_EVENTS").is_some() || std::env::var_os("DEBUG").is_some();
-        if !self.halted && !std::mem::take(&mut self.suppress_async_pump_once) {
+        let root_ended_normally = self.thread_ended && !self.interpreter_terminated;
+        if (!self.halted || root_ended_normally) && !std::mem::take(&mut self.suppress_async_pump_once) {
             if let Some(report) = self.pump_async_programs(api, trace_events, options) {
                 self.halted = true;
                 self.fatal_async_report = Some(Box::new(report.clone()));
@@ -2802,10 +2829,10 @@ impl Vm {
             }
         }
         let response_error = self.settle_ready_host_response().err();
-        // 48D860 skips every non-owner before polling its CProcedure or
-        // executing BP instructions. Child pumping above still reaches the
-        // owner when the root itself is excluded.
-        let procedure_wait = if self.exclusive_thread_id.is_some_and(|owner| owner != self.thread.thread_id()) {
+        let procedure_wait = if self.interpreter_terminated {
+            stop_reason = VmStopReason::InterpreterTerminated;
+            None
+        } else if self.exclusive_thread_id.is_some_and(|owner| owner != self.thread.thread_id()) {
             Some(VmStopReason::WaitingForProcedure)
         } else if let Some(error) = response_error {
             self.push_trace(format!("host response failed: {error}"));
@@ -2956,6 +2983,10 @@ impl Vm {
                         break;
                     }
                     if let Some(signal) = self.scheduler_signal.take() {
+                        if signal == SchedulerSignal::TerminateInterpreter {
+                            self.halted = true;
+                            self.interpreter_terminated = true;
+                        }
                         stop_reason = signal.stop_reason();
                         break;
                     }
@@ -3535,6 +3566,7 @@ impl Vm {
                 // sub_474020: a frame stack at the region base ends the thread.
                 if self.mem_ptr <= self.thread.frame_region_base() {
                     self.halted = true;
+                    self.thread_ended = true;
                 } else if let Some((program_id, fallback_ret, stack_base)) = self.call_stack.pop() {
                     let ret_offset = self.read_return_addr()?;
                     if trace_call_frames_enabled(self.trace_id) {
@@ -3566,6 +3598,7 @@ impl Vm {
                         .unwrap_or(fallback_ret);
                 } else {
                     self.halted = true;
+                    self.thread_ended = true;
                 }
             }
             BpOpcode::Known { name, .. } if matches!(name, "eq" | "neq") => {
@@ -4224,6 +4257,7 @@ impl Vm {
             } => {
                 if self.mem_ptr <= self.thread.frame_region_base() {
                     self.halted = true;
+                    self.thread_ended = true;
                 } else if let Some((program_id, fallback_ret, stack_base)) = self.call_stack.pop() {
                     let ret_offset = self.read_return_addr()?;
                     if trace_call_frames_enabled(self.trace_id) {
@@ -4243,6 +4277,7 @@ impl Vm {
                         .unwrap_or(fallback_ret);
                 } else {
                     self.halted = true;
+                    self.thread_ended = true;
                 }
             }
             BpOpcode::Known {
@@ -17289,6 +17324,154 @@ mod tests {
         assert!(vm.halted);
         assert!(vm.stack.is_empty());
         assert_eq!(report.steps, 1);
+    }
+
+    fn exit_test_program(name: &str, instructions: Vec<BpInstruction>) -> BpProgram {
+        BpProgram {
+            script_name: Some(name.into()),
+            functions: Vec::new(),
+            strings: Vec::new(),
+            instructions,
+            labels: Default::default(),
+            warnings: Vec::new(),
+            module_size: 0,
+        }
+    }
+
+    fn sys80(offset: u64, id: u8) -> BpInstruction {
+        test_instruction(offset, 0x80, "sys1", vec![0x80, id], Vec::new())
+    }
+
+    fn bp_ret(offset: u64) -> BpInstruction {
+        test_instruction(offset, 0x17, "ret", vec![0x17], Vec::new())
+    }
+
+    /// Root CThread that keeps yielding (native status 1) and never returns.
+    fn yielding_root() -> BpProgram {
+        exit_test_program(
+            "yielding-root",
+            vec![sys80(0x10, 0x5f), sys80(0x12, 0x5f), sys80(0x14, 0x5f), bp_ret(0x16)],
+        )
+    }
+
+    fn spawn_child(vm: &mut Vm, program: BpProgram) {
+        vm.start_async_program_with_args(Value::Program(Arc::new(program)), Vec::new(), false)
+            .unwrap();
+    }
+
+    #[test]
+    fn root_terminate_interpreter_ends_the_game() {
+        let program = exit_test_program("root-6a", vec![sys80(0x10, 0x6a), bp_ret(0x12)]);
+        let mut api = SchedulingApi::default();
+        let mut vm = Vm::new();
+
+        let report = vm.run(&program, &mut api, &VmRunOptions::default());
+
+        assert_eq!(report.stop_reason, VmStopReason::InterpreterTerminated);
+        assert!(vm.game_ended());
+        let again = vm.run_loaded(&mut api, &VmRunOptions::default());
+        assert_eq!(again.stop_reason, VmStopReason::InterpreterTerminated);
+        assert_eq!(again.steps, 0);
+        assert!(vm.game_ended());
+    }
+
+    #[test]
+    fn child_terminate_interpreter_ends_the_whole_game() {
+        let mut api = SchedulingApi::default();
+        let mut vm = Vm::new();
+        vm.start(&yielding_root());
+        spawn_child(
+            &mut vm,
+            exit_test_program("child-6a", vec![sys80(0x10, 0x6a), bp_ret(0x12)]),
+        );
+
+        let report = vm.run_loaded(&mut api, &VmRunOptions::default());
+
+        assert_eq!(report.stop_reason, VmStopReason::InterpreterTerminated);
+        assert_eq!(report.steps, 0, "the root must not run after status 6");
+        assert!(vm.halted);
+        assert!(vm.game_ended());
+    }
+
+    #[test]
+    fn restart_with_command_ends_the_game() {
+        let command = 0x3000u32;
+        let program = exit_test_program("root-e1", vec![sys80(0x10, 0xe1), bp_ret(0x12)]);
+        let mut api = SchedulingApi::default();
+        let mut vm = Vm::new();
+        vm.start(&program);
+        vm.write_c_string(command, "game.exe").unwrap();
+        // Pop order: error message, command line, working directory.
+        vm.stack
+            .extend([Value::Ptr(0), Value::Ptr(command), Value::Ptr(0)]);
+
+        let report = vm.run_loaded(&mut api, &VmRunOptions::default());
+
+        assert_eq!(report.stop_reason, VmStopReason::InterpreterTerminated);
+        assert!(vm.game_ended());
+    }
+
+    #[test]
+    fn child_return_while_root_runs_is_not_game_exit() {
+        let mut api = SchedulingApi::default();
+        let mut vm = Vm::new();
+        vm.start(&yielding_root());
+        spawn_child(&mut vm, exit_test_program("child-ret", vec![bp_ret(0x10)]));
+
+        let report = vm.run_loaded(&mut api, &VmRunOptions::default());
+
+        assert_eq!(report.stop_reason, VmStopReason::Yielded);
+        assert!(vm.async_tasks.is_empty());
+        assert!(!vm.halted);
+        assert!(!vm.game_ended());
+    }
+
+    #[test]
+    fn root_return_keeps_live_children_running_until_they_end() {
+        let mut api = SchedulingApi::default();
+        let mut vm = Vm::new();
+        vm.start(&exit_test_program("root-ret", vec![bp_ret(0x10)]));
+        spawn_child(
+            &mut vm,
+            exit_test_program(
+                "child-yield-yield-ret",
+                vec![sys80(0x10, 0x5f), sys80(0x12, 0x5f), bp_ret(0x14)],
+            ),
+        );
+        let options = VmRunOptions::default();
+
+        vm.run_loaded(&mut api, &options);
+        assert!(vm.halted);
+        assert!(vm.root_returned_with_live_children());
+        assert!(!vm.game_ended());
+
+        vm.run_loaded(&mut api, &options);
+        assert_eq!(vm.async_tasks.len(), 1, "the child keeps running");
+        assert!(!vm.game_ended());
+
+        vm.run_loaded(&mut api, &options);
+        assert!(vm.async_tasks.is_empty());
+        assert!(!vm.root_returned_with_live_children());
+        assert!(vm.game_ended());
+    }
+
+    #[test]
+    fn select_bootstrap_reload_is_not_game_exit() {
+        let program = exit_test_program(
+            "root-6b",
+            vec![sys80(0x10, 0x6b), sys80(0x12, 0x5f), bp_ret(0x14)],
+        );
+        let mut api = SchedulingApi::default();
+        let mut vm = Vm::new();
+        vm.start(&program);
+        vm.stack
+            .extend([Value::Str("data".into()), Value::Str("sysprg".into())]);
+
+        let report = vm.run_loaded(&mut api, &VmRunOptions::default());
+
+        assert_eq!(report.stop_reason, VmStopReason::SchedulerPassEnded);
+        assert!(!vm.halted);
+        assert!(!vm.game_ended());
     }
 
     #[test]

@@ -21,6 +21,12 @@ impl AsyncProgramTask {
     }
 }
 
+impl AsyncProgramTask {
+    pub(crate) fn is_completed(&self) -> bool {
+        self.completed
+    }
+}
+
 impl Vm {
     /// Apply the region sizes `0x80:0x44` passed to the child thread that
     /// `start_async_program_with_args` just created.
@@ -500,6 +506,14 @@ impl Vm {
                 // (endsys._bp quits from a child thread).
                 self.refresh_thread_links();
                 return Some(report);
+            }
+
+            if report.stop_reason == VmStopReason::InterpreterTerminated {
+                // Native sub_48C990 ends the whole game on any CThread status 6,
+                // not only the CThread that returned it.
+                self.halted = true;
+                self.interpreter_terminated = true;
+                break;
             }
 
             if report.stop_reason == VmStopReason::SwitchedThread {

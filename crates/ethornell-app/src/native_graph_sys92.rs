@@ -184,8 +184,8 @@ impl RuntimeTraceApi {
                 if !(4..=200).contains(&size) {return fail(format!("指定されたフォントサイズ [ {size} ] は無効です"));}
                 if !(25..=200).contains(&width_percent) {return fail(format!("指定されたフォント幅 [ {width_percent} ] は無効です"));}
                 let text=source.get(3).and_then(value_to_string).unwrap_or_default();
-                let bytes=encoding_rs::SHIFT_JIS.encode(&text).0.into_owned();
-                let (glyphs,result)=snapshot::layout_styled_bitmap_text(&bytes,[x,y],size as u32,width_percent,int(7)!=0,int(8)!=0,int(9) as u32,id==0x1d,if id==0x1d {int(10)}else{0},[image.width,image.height]);
+                let bytes=self.display_encoding.encoding().encode(&text).0.into_owned();
+                let (glyphs,result)=snapshot::layout_styled_bitmap_text(self.text_font(),self.display_encoding,&bytes,[x,y],size as u32,width_percent,int(7)!=0,int(8)!=0,int(9) as u32,id==0x1d,if id==0x1d {int(10)}else{0},[image.width,image.height]);
                 let format=self.bitmap_formats.get(&bitmap).copied().unwrap_or(2);
                 for glyph in &glyphs {crate::bitmap_blend::blit_mode(&mut image,format,&glyph.cell,2,glyph.x,glyph.y,0,0);}
                 if !glyphs.is_empty()&&self.replace_graph_bitmap_pixels(bitmap,image) {self.clear_bitmap_text(bitmap);}
@@ -219,9 +219,11 @@ impl RuntimeTraceApi {
                 if (size - 8) as u32 > 0xC0 {
                     return fail(format!("指定されたフォントサイズ [ {size} ] は無効です"));
                 }
-                let bytes = encoding_rs::SHIFT_JIS.encode(&text).0.into_owned();
+                let bytes = self.display_encoding.encoding().encode(&text).0.into_owned();
                 let (glyphs, advance) = snapshot::layout_direct_bitmap_text(
                     &bytes,
+                    self.text_font(),
+                    self.display_encoding,
                     x,
                     y,
                     size as u32,

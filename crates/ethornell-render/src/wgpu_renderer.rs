@@ -186,7 +186,8 @@ pub struct Renderer<'w> {
     adapter_name: String,
     /// How the game frame fills the surface (Sys81:61's effective mode).
     presentation_scale: PresentationScale,
-    surface: wgpu::Surface<'w>,
+    surface: Option<wgpu::Surface<'w>>,
+    capture: Option<(wgpu::Texture, wgpu::Buffer, u32)>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -241,11 +242,30 @@ impl<'w> Renderer<'w> {
         height: u32,
         font: FontArc,
     ) -> Result<Self> {
+        Self::create(instance, Some(surface), width, height, font).await
+    }
+
+    /// Uses the shared compositor without owning a window or presenting.
+    pub async fn offscreen(width: u32, height: u32, font: Option<FontArc>) -> Result<Self> {
+        let font = match font {
+            Some(font) => font,
+            None => load_system_cjk_font()?,
+        };
+        Self::create(&wgpu::Instance::default(), None, width, height, font).await
+    }
+
+    async fn create(
+        instance: &wgpu::Instance,
+        surface: Option<wgpu::Surface<'w>>,
+        width: u32,
+        height: u32,
+        font: FontArc,
+    ) -> Result<Self> {
         validate_surface_size(width, height, u32::MAX)?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
+                compatible_surface: surface.as_ref(),
                 force_fallback_adapter: false,
             })
             .await
@@ -277,15 +297,26 @@ impl<'w> Renderer<'w> {
                 *fault = Some(format!("GPU error: {error}"));
             }
         }));
-        let caps = surface.get_capabilities(&adapter);
-        let config = surface_configuration(
-            &caps,
-            width,
-            height,
-            device.limits().max_texture_dimension_2d,
-        )?;
+        validate_surface_size(width, height, device.limits().max_texture_dimension_2d)?;
+        let config = if let Some(surface) = surface.as_ref() {
+            let caps = surface.get_capabilities(&adapter);
+            surface_configuration(&caps, width, height, device.limits().max_texture_dimension_2d)?
+        } else {
+            wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                width,
+                height,
+                present_mode: wgpu::PresentMode::Fifo,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            }
+        };
         let format = config.format;
-        surface.configure(&device, &config);
+        if let Some(surface) = surface.as_ref() {
+            surface.configure(&device, &config);
+        }
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("ethornell-texture-layout"),
@@ -408,6 +439,7 @@ impl<'w> Renderer<'w> {
             adapter_name,
             presentation_scale: PresentationScale::Fit,
             surface,
+            capture: None,
             device,
             queue,
             config,
@@ -768,7 +800,10 @@ impl<'w> Renderer<'w> {
         validate_surface_size(width, height, self.device.limits().max_texture_dimension_2d)?;
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        if let Some(surface) = self.surface.as_ref() {
+            surface.configure(&self.device, &self.config);
+        }
+        self.capture = None;
         self.surface_suspended = false;
         Ok(())
     }
@@ -793,10 +828,11 @@ impl<'w> Renderer<'w> {
         if self.surface_suspended {
             return Ok(());
         }
-        let frame = match self.surface.get_current_texture() {
+        let surface = self.surface.as_ref().ok_or_else(|| EthornellError::Other("offscreen target requires capture_rgba".into()))?;
+        let frame = match surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, &self.config);
                 return Ok(());
             }
             Err(wgpu::SurfaceError::Timeout) => return Ok(()),
@@ -805,6 +841,74 @@ impl<'w> Renderer<'w> {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        self.render_view(&view)?;
+        frame.present();
+        Ok(())
+    }
+
+    /// Reads the final GPU composition, including text and game UI.
+    pub fn capture_rgba(&mut self, cancelled: impl Fn() -> bool) -> Result<Vec<u8>> {
+        self.check_gpu()?;
+        if self.surface.is_some() {
+            return Err(EthornellError::Other("capture requires an offscreen target".into()));
+        }
+        if self.capture.is_none() {
+            let stride = (self.config.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+                * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("ethornell-embedded-frame"),
+                size: wgpu::Extent3d { width: self.config.width, height: self.config.height, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                format: self.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("ethornell-embedded-readback"),
+                size: u64::from(stride) * u64::from(self.config.height),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            self.capture = Some((texture, buffer, stride));
+        }
+        let view = self.capture.as_ref().unwrap().0.create_view(&Default::default());
+        self.render_view(&view)?;
+        let (texture, buffer, stride) = self.capture.as_ref().unwrap();
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::ImageCopyBuffer { buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(*stride), rows_per_image: Some(self.config.height) } },
+            wgpu::Extent3d { width: self.config.width, height: self.config.height, depth_or_array_layers: 1 },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| { let _ = sender.send(result); });
+        loop {
+            if cancelled() {
+                buffer.unmap();
+                return Err(EthornellError::Other("frame capture cancelled".into()));
+            }
+            self.device.poll(wgpu::Maintain::Poll);
+            match receiver.try_recv() {
+                Ok(result) => { result.map_err(|e| EthornellError::Other(e.to_string()))?; break; }
+                Err(std::sync::mpsc::TryRecvError::Empty) => std::thread::sleep(std::time::Duration::from_millis(1)),
+                Err(error) => return Err(EthornellError::Other(error.to_string())),
+            }
+        }
+        let mapped = buffer.slice(..).get_mapped_range();
+        let row_bytes = self.config.width as usize * 4;
+        let mut rgba = Vec::with_capacity(row_bytes * self.config.height as usize);
+        for row in mapped.chunks_exact(*stride as usize) {
+            rgba.extend_from_slice(&row[..row_bytes]);
+        }
+        drop(mapped);
+        buffer.unmap();
+        self.check_gpu()?;
+        Ok(rgba)
+    }
+
+    fn render_view(&mut self, view: &wgpu::TextureView) -> Result<()> {
+        self.check_gpu()?;
         let mut draw_items = Vec::new();
         let mut frame_vertices = Vec::<Vertex>::new();
         let mut active_text_keys = BTreeSet::new();
@@ -1085,7 +1189,6 @@ impl<'w> Renderer<'w> {
             }
         }
         self.queue.submit(Some(encoder.finish()));
-        frame.present();
         Ok(())
     }
 

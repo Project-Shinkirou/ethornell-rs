@@ -310,6 +310,7 @@ pub(crate) fn choose_path(
     default_name: &str,
     filters: &[PathDialogFilter],
 ) -> Option<String> {
+    if crate::embedded::unsupported_dialog("path dialog") { return None; }
     if host_dialogs_suppressed() {
         return None;
     }
@@ -390,6 +391,7 @@ fn show_text_platform(title: &str, text: &str) -> bool {
 }
 
 pub(crate) fn show_text(title: &str, text: &str) -> bool {
+    if let Some(answer) = crate::embedded::message_dialog(0, title, text, true) { return answer.unwrap_or(false); }
     if host_dialogs_suppressed() {
         return false;
     }
@@ -552,6 +554,13 @@ pub(crate) fn show_message(
     text: &str,
     default_first: bool,
 ) -> Option<bool> {
+    let embedded_kind = match kind {
+        MessageDialogKind::Information => 0,
+        MessageDialogKind::YesNo => 1,
+        MessageDialogKind::OkCancel => 2,
+        MessageDialogKind::RetryCancel => 3,
+    };
+    if let Some(answer) = crate::embedded::message_dialog(embedded_kind, title, text, default_first) { return answer; }
     if host_dialogs_suppressed() {
         return None;
     }
@@ -742,6 +751,9 @@ pub(crate) fn prompt_text(
     max_bytes: usize,
     constraint: TextInputConstraint,
 ) -> Option<String> {
+    if let Some(answer) = crate::embedded::text_dialog(title, prompt, initial) {
+        return answer.map(|value| constrain_text(&value, max_bytes, constraint));
+    }
     if host_dialogs_suppressed() {
         return None;
     }
@@ -927,6 +939,7 @@ fn choose_item_platform(title: &str, prompt: &str, options: &[String]) -> Option
 }
 
 pub(crate) fn choose_item(title: &str, prompt: &str, options: &[String]) -> Option<String> {
+    if let Some(answer) = crate::embedded::item_dialog(title, prompt, options) { return answer; }
     if host_dialogs_suppressed() {
         return None;
     }
@@ -1069,6 +1082,7 @@ fn set_wallpaper_platform(path: &str, style: i32, _tile: i32) -> bool {
 }
 
 pub(crate) fn set_wallpaper(path: &str, style: i32, tile: i32) -> bool {
+    if crate::embedded::unsupported_dialog("desktop wallpaper mutation") { return false; }
     if super::file_policy::restricted() || host_dialogs_suppressed() { return false; }
     set_wallpaper_platform(path, style, tile)
 }
