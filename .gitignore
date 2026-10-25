@@ -34,3 +34,7 @@ docs/
 # Local full-history checkout of the pinned Kira dependency.
 /vendor/kira/
 /vendor/cpal/
+/dist
+
+# Packaged platform builds (platform/wasm/build.sh)
+/build/

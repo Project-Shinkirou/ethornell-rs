@@ -11,6 +11,51 @@ pub(crate) struct SurfaceTextState {
     pub(crate) font_style: i32,
     pub(crate) layout_option: i32,
     pub(crate) render_option: i32,
+    /// Colour and style of the last 92:90/92:91 message drawn in the window.
+    pub(crate) message_style: Option<MessageTextStyle>,
+}
+
+/// The text colour (packed RGB) and the `sub_434E30` style (mode 1 drop
+/// shadow, mode 2 glow; `None` for neither) that a 92:90/92:91 call gives
+/// the text it draws in a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MessageTextStyle {
+    pub(crate) packed_rgb: u32,
+    pub(crate) effect: Option<crate::snapshot::TextShadow>,
+}
+
+impl MessageTextStyle {
+    /// From the colour operand and the five style fields (mode, x and y as
+    /// percent of the font size, packed RGB, concentration), checked as by
+    /// `sub_434E30` like Graph92:9C does.
+    pub(crate) fn from_operands(packed_rgb: i32, style: [i32; 5], font_size: i32) -> Self {
+        let [mode, x_percent, y_percent, rgb, concentration] = style;
+        let effect = (matches!(mode, 1 | 2)
+            && (0..=100).contains(&x_percent)
+            && (0..=100).contains(&y_percent)
+            && (0..=256).contains(&concentration))
+        .then(|| crate::snapshot::TextShadow {
+            mode,
+            // sub_435290: size * percent / 100, at least 1.
+            dx: (font_size * x_percent / 100).max(1),
+            dy: (font_size * y_percent / 100).max(1),
+            rgb: rgb as u32 & 0x00ff_ffff,
+            concentration,
+        });
+        Self {
+            packed_rgb: packed_rgb as u32 & 0x00ff_ffff,
+            effect,
+        }
+    }
+
+    pub(crate) fn color(self, alpha: f32) -> [f32; 4] {
+        [
+            ((self.packed_rgb >> 16) & 0xff) as f32 / 255.0,
+            ((self.packed_rgb >> 8) & 0xff) as f32 / 255.0,
+            (self.packed_rgb & 0xff) as f32 / 255.0,
+            alpha,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,7 +169,9 @@ impl TextLayoutDefaults {
         if divisor == 0 {
             return false;
         }
-        self.scale_reciprocal_16_16 = divisor.wrapping_add(0xffff) / divisor;
+        // sub_407B60 divides unsigned.
+        self.scale_reciprocal_16_16 =
+            ((divisor as u32).wrapping_add(0xffff) / divisor as u32) as i32;
         true
     }
 }
@@ -248,11 +295,10 @@ impl GraphRuntimeDefaults {
     }
 
     pub(crate) fn configure_shadow(&mut self, x: i32, y: i32, alpha: i32) {
-        if (0..=100).contains(&x) && (0..=100).contains(&y) && (0..=256).contains(&alpha) {
-            self.shadow_x = x;
-            self.shadow_y = y;
-            self.shadow_alpha = alpha;
-        }
+        // sub_463790 stores the checked values as they are.
+        self.shadow_x = x;
+        self.shadow_y = y;
+        self.shadow_alpha = alpha;
     }
 
     pub(crate) fn shadow_parameters(&self) -> Option<(i32, i32, i32)> {

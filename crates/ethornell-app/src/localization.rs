@@ -48,7 +48,7 @@ impl DisplayConfiguration {
         if !path.starts_with(&root) || !path.is_file() {
             return Err(EthornellError::Other("font_path does not resolve to a game font file".into()));
         }
-        ethornell_render::load_font_file(&path, self.font_index).map(Some)
+        ethornell_render::FontProvider::load_file(&path, self.font_index).map(Some)
     }
 }
 

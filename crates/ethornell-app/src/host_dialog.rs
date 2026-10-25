@@ -5,6 +5,13 @@ use std::process::Command;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use std::process::Stdio;
 
+/// Unit tests drive host-facing selectors with dummy arguments; they must never
+/// open a real dialog or touch the desktop, so every entry point answers as if
+/// the user had cancelled.
+pub(crate) fn host_dialogs_suppressed() -> bool {
+    cfg!(test) || std::env::var_os("ETHORNELL_NO_HOST_DIALOGS").is_some()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PathDialogMode {
     OpenFile,
@@ -304,6 +311,9 @@ pub(crate) fn choose_path(
     filters: &[PathDialogFilter],
 ) -> Option<String> {
     if crate::embedded::unsupported_dialog("path dialog") { return None; }
+    if host_dialogs_suppressed() {
+        return None;
+    }
     choose_path_platform(mode, title, initial_directory, default_name, filters).map(|path| {
         let path = PathBuf::from(path);
         path.to_string_lossy().into_owned()
@@ -382,6 +392,9 @@ fn show_text_platform(title: &str, text: &str) -> bool {
 
 pub(crate) fn show_text(title: &str, text: &str) -> bool {
     if let Some(answer) = crate::embedded::message_dialog(0, title, text, true) { return answer.unwrap_or(false); }
+    if host_dialogs_suppressed() {
+        return false;
+    }
     show_text_platform(title, text)
 }
 
@@ -548,6 +561,9 @@ pub(crate) fn show_message(
         MessageDialogKind::RetryCancel => 3,
     };
     if let Some(answer) = crate::embedded::message_dialog(embedded_kind, title, text, default_first) { return answer; }
+    if host_dialogs_suppressed() {
+        return None;
+    }
     show_message_platform(kind, title, text, default_first)
 }
 
@@ -574,7 +590,7 @@ fn truncate_shift_jis(text: &str, max_bytes: usize) -> String {
     output
 }
 
-fn constrain_text(text: &str, max_bytes: usize, constraint: TextInputConstraint) -> String {
+pub(crate) fn constrain_text(text: &str, max_bytes: usize, constraint: TextInputConstraint) -> String {
     let filtered = match constraint {
         TextInputConstraint::Any => text.to_string(),
         TextInputConstraint::SignedDecimal => {
@@ -737,6 +753,9 @@ pub(crate) fn prompt_text(
 ) -> Option<String> {
     if let Some(answer) = crate::embedded::text_dialog(title, prompt, initial) {
         return answer.map(|value| constrain_text(&value, max_bytes, constraint));
+    }
+    if host_dialogs_suppressed() {
+        return None;
     }
     let value = prompt_text_platform(title, prompt, initial)?;
     Some(constrain_text(&value, max_bytes, constraint))
@@ -921,6 +940,9 @@ fn choose_item_platform(title: &str, prompt: &str, options: &[String]) -> Option
 
 pub(crate) fn choose_item(title: &str, prompt: &str, options: &[String]) -> Option<String> {
     if let Some(answer) = crate::embedded::item_dialog(title, prompt, options) { return answer; }
+    if host_dialogs_suppressed() {
+        return None;
+    }
     choose_item_platform(title, prompt, options)
 }
 
@@ -1061,5 +1083,6 @@ fn set_wallpaper_platform(path: &str, style: i32, _tile: i32) -> bool {
 
 pub(crate) fn set_wallpaper(path: &str, style: i32, tile: i32) -> bool {
     if crate::embedded::unsupported_dialog("desktop wallpaper mutation") { return false; }
+    if super::file_policy::restricted() || host_dialogs_suppressed() { return false; }
     set_wallpaper_platform(path, style, tile)
 }

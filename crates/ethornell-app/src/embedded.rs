@@ -146,7 +146,10 @@ impl Embedded {
             if host.borrow().cancelled() { Err(EthornellError::Other("open cancelled".into())) } else { Ok(()) }
         };
         check_cancelled()?;
-        let font = display.load_font(root)?;
+        let font = Some(match display.load_font(root)? {
+            Some(font) => font,
+            None => snapshot::load_default_font()?,
+        });
         let manager = ResourceManager::open_game(root)?;
         check_cancelled()?;
         let bytes = manager.read_decoded_from_archive("system.arc", "ipl._bp")?;
@@ -275,10 +278,9 @@ impl Embedded {
         if width > 16384 || height > 16384 || u64::from(width) * u64::from(height) * 4 > 512 * 1024 * 1024 {
             return Err(EthornellError::Other("native frame exceeds host surface limits".into()));
         }
-        if self.renderer.surface_size() != (width, height) { self.renderer.resize(width, height); }
+        if self.renderer.surface_size() != (width, height) { self.renderer.try_resize(width, height)?; }
         self.renderer.set_virtual_size(width as f32, height as f32);
-        let commands = crate::composition::compose_runtime_frame(&mut self.runtime, &mut self.renderer, &mut self.textures,
-            vec![RenderCommand::Clear { color: [0.0, 0.0, 0.0, 1.0] }]);
+        let commands = crate::frame_presenter::prepare_frame(&mut self.renderer, &self.runtime.api, &mut self.textures)?;
         self.renderer.submit(&commands);
         let host = &self.host;
         let rgba = self.renderer.capture_rgba(|| host.borrow().cancelled())?;
