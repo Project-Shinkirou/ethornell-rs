@@ -9573,6 +9573,8 @@ impl RuntimeEngine {
             self.api.native_dialog_presentation,
             self.vm.graph_text_encoding(),
         );
+        engine.api.display_font = self.api.display_font.clone();
+        engine.api.display_encoding = self.api.display_encoding;
         if self.api.host_realtime_clock {
             engine.use_host_clock();
         }
