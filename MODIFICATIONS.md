@@ -33,6 +33,8 @@ Core-side changes for embedding are the shared standalone/embedded composition, 
 
 The adapter accepts both macOS architectures and the iOS device/simulator triples. Its `rlib` exposes the Rust-path `QUERY` for static registration without an unmangled export; `diagnostic-bridge` enables the dynamic `shinki_emu_query` symbol for the `cdylib`. License inputs stay in `core-build.json`.
 
+The adapter probe requires a direct `system.arc` with a readable `ipl._bp`. It matches the archive filename case-insensitively and does not search child directories. Runtime archive discovery remains recursive.
+
 # License text
 
 `LICENSE-MPL-2.0` is the canonical Mozilla Public License 2.0 text, added to accompany the `MPL-2.0` declaration in the upstream root `[workspace.package]`. Upstream ships no license file.
