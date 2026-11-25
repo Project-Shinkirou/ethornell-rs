@@ -22,8 +22,10 @@ fn main() {
                 | "aarch64-apple-ios"
                 | "aarch64-apple-ios-sim"
                 | "x86_64-apple-ios"
+                | "aarch64-linux-android"
+                | "x86_64-linux-android"
         ),
-        "ethornell-rs embedded adapter requires a supported Windows, Linux or Apple target"
+        "ethornell-rs embedded adapter requires a supported Windows, Linux, Apple or Android target"
     );
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
         .join("../..")

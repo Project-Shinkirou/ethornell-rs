@@ -83,6 +83,12 @@ host tracing subscriber. Startup-only configuration fields are `trace` and
 `fail_on_stub` (advanced) plus the display localization fields; no text/resource
 hooks, live configuration or render-extent control are advertised, and open
 rejects any nonzero requested render extent.
+
+ShinkiEMU's Android ARM64 and x86-64 packages use the dynamic ABI with the
+host-driven frontend. On activation, the Manager supplies its JavaVM and
+Application global reference through `shinki.emu.android_context` v1 before
+core initialization. The product wrapper selects Oboe's shared C++ runtime.
+
 Logical size L is the script's native screen size. Raster R equals L. Output O
 is the host's actual client size and does not resize R. Pointer coordinates
 already refer to the displayed raster; the adapter applies no second host
@@ -107,11 +113,12 @@ and gameplay continues, without acknowledging a successful warp or updating
 actual Host cursor state. Cancellation, stale context, malformed protocol and
 other window/modal operations remain errors.
 
-Dependencies are exact git revisions: `shinki-emu-abi` and the host-side
-`shinki-emu-build` helper from
-`Project-Shinkirou/ShinkiEMU@cb8d9dd22d7d0ab129085b324c94d6dc81fa19e3`
-(C ABI 3), and Kira 0.8.7
-from `Project-Shinkirou/kira@da8668fcd5e543eec2e9ea9871b310276e09fdc5`. The Kira fix
+Dependencies are exact git revisions: `shinki-emu-abi` (C ABI v3) from
+`Project-Shinkirou/ShinkiEMU@cf825f64d73d8856f763d75708d4bf0d995e3de4`,
+`shinki-emu-build` from
+`Project-Shinkirou/ShinkiEMU@9cd899babbb54cbc84c3e9fbddfe192c2f9200c8`,
+and Kira 0.8.7 from
+`Project-Shinkirou/kira@da8668fcd5e543eec2e9ea9871b310276e09fdc5`. The Kira fix
 is separate from the adapter, based on upstream
 `f46857e121872416fba0d539ff3d59aa99876fb8`, retaining its MIT/Apache-2.0 files.
 It joins the desktop device watcher and adds an explicit gameplay-thread
@@ -125,7 +132,8 @@ Its WASAPI stream destructor also joins when the Terminate channel is already
 disconnected. Integrating workspaces must repeat this root-level patch because
 Cargo ignores dependency-local patches.
 
-Build from the fork checkout with Rust 1.92 or newer and MSVC build tools:
+Build the Windows adapter from the fork checkout with Rust 1.99 or newer
+and MSVC build tools:
 
 ```sh
 cargo build --manifest-path Cargo.toml --locked --release --target x86_64-pc-windows-msvc -p shinki-emu-ethornell-rs --features diagnostic-bridge
@@ -133,8 +141,7 @@ cargo build --manifest-path Cargo.toml --locked --release --target x86_64-pc-win
 
 `build.rs` writes target/profile, `LICENSE-MPL-2.0` and `MODIFICATIONS.md` into
 `OUT_DIR/core-build.json`. No core Resources are required; archives and optional
-font overrides come from the user's game tree. The embedded adapter currently
-supports Windows x64 MSVC.
+font overrides come from the user's game tree.
 
 For manual acceptance, load `target/x86_64-pc-windows-msvc/release/shinki_emu_ethornell_rs.dll`
 in the integrated Shinki Manager using an authorized game copy and isolated user

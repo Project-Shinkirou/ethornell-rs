@@ -137,24 +137,9 @@ use user_files::{
     read_runtime_bytes, resolve_existing_path_case_insensitive, runtime_file_cache_key,
     runtime_file_exists_from_root, runtime_file_path, runtime_file_path_from_root,
 };
-#[cfg(feature = "desktop-window")]
-use winit::keyboard::KeyCode;
-#[cfg(not(feature = "desktop-window"))]
-#[derive(Clone, Copy)]
-enum KeyCode {
-    ArrowLeft,
-    ArrowUp,
-    ArrowRight,
-    ArrowDown,
-    Enter,
-    NumpadEnter,
-    Space,
-    Tab,
-    Backspace,
-}
+use winit_core::keyboard::KeyCode;
 #[cfg(feature = "desktop-window")]
 mod window;
-#[cfg(feature = "desktop-window")]
 mod window_icon;
 #[cfg(feature = "desktop-window")]
 use window::run_window;
@@ -9837,7 +9822,6 @@ fn parse_env_point(x_key: &str, y_key: &str) -> Option<(f32, f32)> {
 /// and scripts bind input classes to those codes with Sys80:1B (Wonderful
 /// Everyday: Ctrl and Space hold the skip gate, Escape cancels, Page Up/Down
 /// scroll).
-#[cfg(feature = "desktop-window")]
 fn input_descriptor_for_keycode(code: KeyCode) -> Option<i32> {
     let descriptor = match code {
         KeyCode::Backspace => 0x08,
@@ -10852,7 +10836,7 @@ mod input_tests {
 
     #[test]
     fn keys_reach_the_scripts_as_windows_virtual_keys() {
-        use winit::keyboard::KeyCode;
+        use winit_core::keyboard::KeyCode;
 
         for (code, descriptor) in [
             (KeyCode::Enter, 0x0D),

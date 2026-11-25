@@ -1191,6 +1191,7 @@ dependencies = [
  "vitasdk-sys",
  "wgpu 0.19.4",
  "winit 0.31.0-beta.3",
+ "winit-core",
 ]
 
 [[package]]
@@ -4011,7 +4012,7 @@ dependencies = [
 [[package]]
 name = "shinki-emu-abi"
 version = "0.1.0"
-source = "git+https://github.com/Project-Shinkirou/ShinkiEMU?rev=9cd899babbb54cbc84c3e9fbddfe192c2f9200c8#9cd899babbb54cbc84c3e9fbddfe192c2f9200c8"
+source = "git+https://github.com/Project-Shinkirou/ShinkiEMU?rev=cf825f64d73d8856f763d75708d4bf0d995e3de4#cf825f64d73d8856f763d75708d4bf0d995e3de4"
 dependencies = [
  "tracing",
  "tracing-log",
@@ -4037,6 +4038,7 @@ version = "0.1.0"
 dependencies = [
  "ethornell-app",
  "ethornell-archive",
+ "ndk-context",
  "shinki-emu-abi",
  "shinki-emu-build",
  "tracing",

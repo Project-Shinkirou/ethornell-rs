@@ -27,6 +27,7 @@ serde_json.workspace = true
 pollster.workspace = true
 tracing.workspace = true
 winit = { workspace = true, optional = true }
+winit-core = "0.31.0-beta.3"
 image = { workspace = true, features = ["ico"] }
 pelite = { version = "0.10", default-features = false, features = ["std"] }
 libc = "0.2"

@@ -4,7 +4,7 @@
 `3ee43dab43854e2f9c614dd1d26213e17911d877` (2026-11-05, `fix 0E`). The previous
 integration base was `b5de417e4cff681bd2afb929e22e903d64602456`. The published
 `shinki` branch remains at `f8362be7d2f4d634c25a98a317dfe56ffae56346`; its
-history is not rewritten. The adapter uses Rust 1.98 and edition 2024.
+history is not rewritten. That replay used Rust 1.98 and edition 2024.
 
 The embedded frontend uses upstream's shared `frame_presenter` and refactored wgpu renderer, including gamma-space composition, text effects and frame budgets. Offscreen capture, explicit per-runtime fonts and encodings, host modal services, live child-thread completion and decoder-owned shutdown remain integrated.
 
@@ -74,11 +74,24 @@ The HD external private-container consumer and additional archive ownership, and
 
 # Shinki adapter package
 
-`crates/shinki-emu-ethornell-rs` is the ShinkiEMU C ABI v3 adapter: package `shinki-emu-ethornell-rs`, library `shinki_emu_ethornell_rs`, plugin id `ethornell-rs`. It exports `shinki_emu_query`; the `diagnostic-bridge` feature is used for the dynamically loaded `shinki_emu_ethornell_rs.dll`. Its ABI and host-side build helper use `Project-Shinkirou/ShinkiEMU@cb8d9dd22d7d0ab129085b324c94d6dc81fa19e3`. The Cargo build script writes the target/profile and license inputs to `core-build.json`; Cargo owns the actual Rust library build.
+`crates/shinki-emu-ethornell-rs` is the ShinkiEMU C ABI v3 adapter: package
+`shinki-emu-ethornell-rs`, library `shinki_emu_ethornell_rs`, plugin id
+`ethornell-rs`. It uses the ABI from `Project-Shinkirou/ShinkiEMU@cf825f64`
+(Rust 1.99) and the build helper from `Project-Shinkirou/ShinkiEMU@9cd899ba`.
+The build script writes the target, profile and license inputs to
+`core-build.json`; Cargo builds the library.
 
 Core-side changes for embedding are the shared standalone/embedded composition, the offscreen embedded frontend, typed host dialogs, per-runtime font discovery and session-owned audio shutdown in `ethornell-app`, `ethornell-render` and `ethornell-audio`.
 
 The adapter accepts both macOS architectures and the iOS device/simulator triples. Its `rlib` exposes the Rust-path `QUERY` for static registration without an unmangled export; `diagnostic-bridge` enables the dynamic `shinki_emu_query` symbol for the `cdylib`. License inputs stay in `core-build.json`.
+
+On Android ARM64 and x86-64, the product builds a dynamic adapter with the
+host-driven `Embedded` frontend. It uses the same key mapping and game icon
+loader as the other native targets without linking the desktop window backend.
+On activation, `shinki.emu.android_context` v1 binds the host's process JavaVM
+and Application global reference to the core's `ndk-context` before core
+initialization. Kira audio retains CPAL/Oboe; the product wrapper selects the
+shared NDK C++ runtime.
 
 # License text
 

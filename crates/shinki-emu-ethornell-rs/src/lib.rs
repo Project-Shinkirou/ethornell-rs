@@ -19,8 +19,20 @@ use std::{
     thread::{self, JoinHandle},
     time::Instant,
 };
+#[cfg(target_os = "android")]
+use std::sync::OnceLock;
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "android")]
+static ANDROID_CONTEXT: OnceLock<(usize, usize)> = OnceLock::new();
+
+#[cfg(target_os = "android")]
+static ANDROID_CONTEXT_TABLE: AndroidContextV1 = AndroidContextV1 {
+    header: Header::of::<AndroidContextV1>(),
+    initialize: Some(initialize_android_context),
+};
+
 const fn bytes(text: &'static str) -> Bytes {
     Bytes {
         data: text.as_ptr(),
@@ -795,6 +807,36 @@ fn initialized() -> Result<(), (Status, String)> {
         Err(failure(INVALID_STATE, "initialize diagnostics first"))
     }
 }
+
+#[cfg(target_os = "android")]
+unsafe extern "C" fn initialize_android_context(
+    vm: *mut c_void,
+    application: *mut c_void,
+    error: *mut Error,
+) -> Status {
+    boundary(error, || {
+        if vm.is_null() || application.is_null() {
+            return Err(failure(
+                INVALID_ARGUMENT,
+                "JavaVM and Application global reference are required",
+            ));
+        }
+        let binding = (vm as usize, application as usize);
+        let current = ANDROID_CONTEXT.get_or_init(|| {
+            // The host owns both JNI references for the process lifetime.
+            unsafe { ndk_context::initialize_android_context(vm, application) };
+            binding
+        });
+        if *current != binding {
+            return Err(failure(
+                INVALID_STATE,
+                "Android context is already bound to different process references",
+            ));
+        }
+        Ok(())
+    })
+}
+
 unsafe extern "C" fn initialize(diagnostics: *const Diagnostics, error: *mut Error) -> Status {
     boundary(error, || {
         if diagnostics.is_null() || !diagnostics.is_aligned() {
@@ -806,6 +848,10 @@ unsafe extern "C" fn initialize(diagnostics: *const Diagnostics, error: *mut Err
             || diagnostics.flush.is_none()
         {
             return Err(failure(INVALID_ARGUMENT, "invalid diagnostics"));
+        }
+        #[cfg(target_os = "android")]
+        if ANDROID_CONTEXT.get().is_none() {
+            return Err(failure(INVALID_STATE, "initialize Android context first"));
         }
         #[cfg(feature = "diagnostic-bridge")]
         unsafe { diagnostic_bridge::install(diagnostics) }
@@ -1270,13 +1316,22 @@ unsafe extern "C" fn close(session: Session, error: *mut Error) -> Status {
         Ok(())
     })
 }
-unsafe extern "C" fn extension(_name: Bytes, _version: u32, output: *mut *const c_void) -> Status {
+unsafe extern "C" fn extension(name: Bytes, version: u32, output: *mut *const c_void) -> Status {
     if output.is_null() || !output.is_aligned() {
         return INVALID_ARGUMENT;
     }
     unsafe {
         *output = ptr::null();
     }
+    #[cfg(target_os = "android")]
+    if version == ANDROID_CONTEXT_VERSION
+        && unsafe { name.as_slice(ANDROID_CONTEXT_EXTENSION.len()) } == Ok(ANDROID_CONTEXT_EXTENSION)
+    {
+        unsafe { *output = (&raw const ANDROID_CONTEXT_TABLE).cast() };
+        return OK;
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = (name, version);
     UNSUPPORTED
 }
 static API: CoreApi = CoreApi {

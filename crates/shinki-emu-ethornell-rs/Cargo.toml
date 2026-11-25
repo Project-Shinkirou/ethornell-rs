@@ -2,7 +2,7 @@
 name = "shinki-emu-ethornell-rs"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.99"
 publish = false
 build = "build.rs"
 
@@ -15,10 +15,16 @@ default = []
 diagnostic-bridge = ["shinki-emu-abi/diagnostic-bridge"]
 
 [dependencies]
-shinki-emu-abi = { git = "https://github.com/Project-Shinkirou/ShinkiEMU", rev = "9cd899babbb54cbc84c3e9fbddfe192c2f9200c8" }
-ethornell-app = { path = "../ethornell-app" }
+shinki-emu-abi = { git = "https://github.com/Project-Shinkirou/ShinkiEMU", rev = "cf825f64d73d8856f763d75708d4bf0d995e3de4" }
 ethornell-archive = { path = "../ethornell-archive" }
 tracing.workspace = true
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+ethornell-app = { path = "../ethornell-app" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ethornell-app = { path = "../ethornell-app", default-features = false, features = ["host-driven"] }
+ndk-context = "0.1.1"
 
 [build-dependencies]
 shinki-emu-build = { git = "https://github.com/Project-Shinkirou/ShinkiEMU", rev = "9cd899babbb54cbc84c3e9fbddfe192c2f9200c8" }

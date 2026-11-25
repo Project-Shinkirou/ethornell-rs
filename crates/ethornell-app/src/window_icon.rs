@@ -1,8 +1,11 @@
 //! Read game icons as data, including icons embedded in Windows executables.
 use std::path::Path;
+#[cfg(feature = "desktop-window")]
 use winit::icon::RgbaIcon;
+#[cfg(feature = "desktop-window")]
 use winit::window::WindowAttributes;
 
+#[cfg(feature = "desktop-window")]
 pub(super) fn configure(attributes: WindowAttributes, root: &Path) -> WindowAttributes {
     let Some(rgba) = load(root) else {
         return attributes;
