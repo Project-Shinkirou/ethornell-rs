@@ -7,8 +7,9 @@ use ethornell_app::localization::{DisplayConfiguration, DisplayEncoding};
 use std::{
     cell::RefCell,
     ffi::c_void,
+    fs,
     panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr,
     rc::Rc,
     sync::{
@@ -846,8 +847,28 @@ unsafe extern "C" fn probe(path: Bytes, output: *mut ProbeResult, error: *mut Er
             return Err(failure(INVALID_ARGUMENT, "missing probe output"));
         }
         let path = unsafe { path.text(32768) }.map_err(|s| failure(s, "invalid game path"))?;
-        let manager = ethornell_archive::ResourceManager::open_game(path)
-            .map_err(|_| failure(NO_MATCH, "BGI archive root not found"))?;
+        let path = Path::new(path);
+        // Index only the candidate's direct bootstrap archive. Runtime archive
+        // discovery is recursive and can resolve system.arc in a child game.
+        let archive = fs::read_dir(path)
+            .map_err(|_| failure(NO_MATCH, "BGI archive root not found"))?
+            .flatten()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .as_encoded_bytes()
+                    .eq_ignore_ascii_case(b"system.arc")
+                    && entry.file_type().is_ok_and(|kind| kind.is_file())
+            })
+            .ok_or_else(|| failure(NO_MATCH, "BGI bootstrap archive is not at the candidate root"))?
+            .path();
+        let file = fs::File::open(&archive)
+            .map_err(|_| failure(NO_MATCH, "BGI bootstrap archive could not be opened"))?;
+        let manager = ethornell_archive::ResourceManager::from_authorized_files(
+            path.to_path_buf(),
+            vec![(archive, file)],
+        )
+        .map_err(|_| failure(NO_MATCH, "invalid BGI bootstrap archive"))?;
         manager
             .read_decoded_from_archive("system.arc", "ipl._bp")
             .map_err(|_| failure(NO_MATCH, "BGI bootstrap not found"))?;
@@ -1462,5 +1483,102 @@ mod session_lifecycle_tests {
             INVALID_STATE
         );
         assert_eq!(unsafe { close(session, &mut error) }, OK);
+    }
+}
+
+#[cfg(test)]
+mod probe_root_tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "shinki-ethornell-probe-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn bootstrap_archive() -> Vec<u8> {
+        let mut data = ethornell_archive::MAGIC_PACK_FILE_FULL.to_vec();
+        data.resize(12, 0);
+        data.extend_from_slice(&1u32.to_le_bytes());
+        let mut record = vec![0; 0x20];
+        record[..8].copy_from_slice(b"ipl._bp\0");
+        record[0x14..0x18].copy_from_slice(&5u32.to_le_bytes());
+        data.extend(record);
+        data.extend_from_slice(b"12345");
+        data
+    }
+
+    fn probe_directory(path: &Path) -> (Status, ProbeResult) {
+        INITIALIZED.store(true, Ordering::Release);
+        let path = path.to_str().unwrap().to_owned();
+        let mut output: ProbeResult = unsafe { std::mem::zeroed() };
+        let mut error: Error = unsafe { std::mem::zeroed() };
+        let status = unsafe { probe(Bytes::new(path.as_bytes()), &mut output, &mut error) };
+        (status, output)
+    }
+
+    #[test]
+    fn nested_bgi_game_does_not_make_the_parent_a_game_root() {
+        let root = TempDir::new();
+        let nested = root.0.join("game");
+        fs::create_dir(&nested).unwrap();
+        fs::write(root.0.join("BGI.gdb"), b"parent user data").unwrap();
+        fs::write(nested.join("system.arc"), bootstrap_archive()).unwrap();
+
+        let (status, _) = probe_directory(&root.0);
+        assert_eq!(status, NO_MATCH);
+    }
+
+    #[test]
+    fn invalid_direct_archive_does_not_borrow_the_child_bootstrap() {
+        let root = TempDir::new();
+        let nested = root.0.join("game");
+        fs::create_dir(&nested).unwrap();
+        fs::write(root.0.join("system.arc"), b"not a BGI archive").unwrap();
+        fs::write(nested.join("system.arc"), bootstrap_archive()).unwrap();
+
+        assert_eq!(probe_directory(&root.0).0, NO_MATCH);
+        assert_eq!(probe_directory(&nested).0, OK);
+    }
+
+    #[test]
+    fn direct_bootstrap_archive_matches_without_bgi_gdb() {
+        let root = TempDir::new();
+        fs::write(root.0.join("system.arc"), bootstrap_archive()).unwrap();
+
+        let (status, output) = probe_directory(&root.0);
+        assert_eq!(status, OK);
+        assert_eq!(
+            unsafe { output.format.as_slice(64) }.unwrap(),
+            b"bgi-bp-arc"
+        );
+        assert_eq!(
+            unsafe { output.game_id.as_slice(64) }.unwrap(),
+            b"ethornell-bgi"
+        );
+    }
+
+    #[test]
+    fn mixed_case_direct_bootstrap_archive_matches() {
+        let root = TempDir::new();
+        fs::write(root.0.join("SyStEm.ArC"), bootstrap_archive()).unwrap();
+
+        assert_eq!(probe_directory(&root.0).0, OK);
     }
 }
