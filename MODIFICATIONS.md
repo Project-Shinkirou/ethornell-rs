@@ -93,6 +93,11 @@ and Application global reference to the core's `ndk-context` before core
 initialization. Kira audio retains CPAL/Oboe; the product wrapper selects the
 shared NDK C++ runtime.
 
+The adapter probe checks the candidate directory's own `system.arc` for a
+readable `ipl._bp`. The archive name is matched case-insensitively so the
+scanner can reject a library folder and still recognize its child game roots.
+Runtime archive discovery remains recursive.
+
 # License text
 
 `LICENSE-MPL-2.0` is the canonical Mozilla Public License 2.0 text, added to accompany the `MPL-2.0` declaration in the upstream root `[workspace.package]`. Upstream ships no license file.
