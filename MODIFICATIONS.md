@@ -100,4 +100,7 @@ Runtime archive discovery remains recursive.
 
 # License text
 
-`LICENSE-MPL-2.0` is the canonical Mozilla Public License 2.0 text, added to accompany the `MPL-2.0` declaration in the upstream root `[workspace.package]`. Upstream ships no license file.
+The adapter and its first-party engine library dependencies inherit the
+upstream root `[workspace.package]` license declaration, `MPL-2.0`. The fork
+ships the [canonical license text](LICENSE-MPL-2.0), which upstream does not
+include. This does not change the [separate MPEG-1/2 decoder terms](crates/na_mpeg2_decoder/NOTICE.md).

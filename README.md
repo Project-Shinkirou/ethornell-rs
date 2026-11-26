@@ -149,9 +149,7 @@ files. Exercise title/menu, dialogue, native save/load, pause/resume and
 close/reopen through the real Manager window. Run acceptance manually, without
 automated input or screenshot drivers.
 
-Upstream's root `[workspace.package]` declares `MPL-2.0`; the pinned tree
-contains no license text, and its crate manifests do not inherit that
-declaration. This adaptation adds the canonical Mozilla Public License 2.0 text
-as `LICENSE-MPL-2.0` to accompany the declared license in source and binary
-distributions. It preserves existing declarations without relicensing and does
-not grant new rights.
+The engine crates linked by the Shinki adapter and the adapter itself inherit
+upstream's workspace `MPL-2.0` declaration. The adapter ships the full
+[Mozilla Public License 2.0 text](LICENSE-MPL-2.0). The MPEG-1/2 decoder has
+separate [license terms and attributions](crates/na_mpeg2_decoder/NOTICE.md).
