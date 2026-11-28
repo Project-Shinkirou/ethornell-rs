@@ -2,6 +2,12 @@
 
 `ethornell-rs` is a reimplementation of the Ethornell / BURIKO General Interpreter (a.k.a. "BGI") visual novel engine.
 
+## ShinkiEMU core CI
+
+CI tests and builds the locked `shinki-emu-ethornell-rs` adapter with `diagnostic-bridge` for Windows, Linux, macOS (Arm64 and x64), Android (Arm64 and x64), and iOS (Arm64 device, Arm64 and x64 simulators). Android and iOS tests run on the desktop build host; the target core itself is linked for Android API 28 or the appropriate Xcode SDK.
+
+To stage one target, manually dispatch **ShinkiEMU core CI** with a reviewed, Git-tracked attribution JSON and the target triple. Desktop and Android stage standalone inputs; iOS stages an unsigned composition input. The workflow does not allocate a release sequence or upload binaries on a public repository.
+
 <table>
   <tr>
     <td width="50%" align="center">

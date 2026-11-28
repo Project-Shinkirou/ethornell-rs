@@ -16,7 +16,7 @@ default = []
 diagnostic-bridge = ["shinki-emu-abi/diagnostic-bridge"]
 
 [dependencies]
-shinki-emu-abi = { git = "https://github.com/Project-Shinkirou/ShinkiEMU", rev = "cf825f64d73d8856f763d75708d4bf0d995e3de4" }
+shinki-emu-abi = { git = "https://github.com/Project-Shinkirou/ShinkiEMU-CoreKit", rev = "58d00070ebe02030de1cde9e3d91abd696201067" }
 ethornell-archive = { path = "../ethornell-archive" }
 tracing.workspace = true
 
@@ -26,6 +26,8 @@ ethornell-app = { path = "../ethornell-app" }
 [target.'cfg(target_os = "android")'.dependencies]
 ethornell-app = { path = "../ethornell-app", default-features = false, features = ["host-driven"] }
 ndk-context = "0.1.1"
+# Keep the shared NDK C++ runtime selected by the former Manager wrapper.
+oboe = { version = "=0.6.1", features = ["shared-stdcxx"] }
 
 [build-dependencies]
-shinki-emu-build = { git = "https://github.com/Project-Shinkirou/ShinkiEMU", rev = "9cd899babbb54cbc84c3e9fbddfe192c2f9200c8" }
+shinki-emu-build = { git = "https://github.com/Project-Shinkirou/ShinkiEMU-CoreKit", rev = "58d00070ebe02030de1cde9e3d91abd696201067" }
