@@ -11,6 +11,8 @@ fn main() {
         .expect("Cargo must provide the core build target and profile");
     if manifest.target.ends_with("-apple-darwin") {
         println!("cargo:rustc-cdylib-link-arg=-Wl,-install_name,@rpath/libshinki_emu_ethornell_rs.dylib");
+    } else if manifest.target.contains("-apple-ios") {
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-install_name,@rpath/ethornell-rs.framework/ethornell-rs");
     }
     assert!(
         matches!(
@@ -34,6 +36,14 @@ fn main() {
     manifest.licenses = vec![
         BuildAsset { source: root.join("LICENSE-MPL-2.0"), dest: "licenses/ethornell-rs/LICENSE-MPL-2.0".into() },
         BuildAsset { source: root.join("MODIFICATIONS.md"), dest: "licenses/ethornell-rs/MODIFICATIONS.md".into() },
+        BuildAsset {
+            source: root.join("crates/na_mpeg2_decoder/LICENSE-LGPL-2.1"),
+            dest: "licenses/ethornell-rs/na_mpeg2_decoder/LICENSE-LGPL-2.1".into(),
+        },
+        BuildAsset {
+            source: root.join("crates/na_mpeg2_decoder/NOTICE.md"),
+            dest: "licenses/ethornell-rs/na_mpeg2_decoder/NOTICE.md".into(),
+        },
     ];
     write_core_build_manifest(&manifest).expect("writing ethornell-rs core-build.json");
 }

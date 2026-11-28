@@ -49,4 +49,5 @@ bytemuck = { version = "1", features = ["derive"] }
 ab_glyph = "0.2"
 
 [patch.crates-io]
-cpal = { git = "https://github.com/Project-Shinkirou/cpal.git", rev = "65ac8a6ac1a635cc26bfc5af331295b052044908" }
+# Match the Android context-aware CPAL pin used by the integrated core.
+cpal = { git = "https://github.com/Project-Shinkirou/cpal.git", rev = "ecfda841a9140d60bbec1630d47ca91f1a77b8f3" }

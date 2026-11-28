@@ -1,3 +1,6 @@
+[env]
+SHINKI_EMU_WORK_ROOT = { value = ".work", relative = true }
+
 # getrandom (through ruffle's rand) needs its JavaScript backend on the web.
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

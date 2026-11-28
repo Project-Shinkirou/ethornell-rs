@@ -76,10 +76,10 @@ The HD external private-container consumer and additional archive ownership, and
 
 `crates/shinki-emu-ethornell-rs` is the ShinkiEMU C ABI v3 adapter: package
 `shinki-emu-ethornell-rs`, library `shinki_emu_ethornell_rs`, plugin id
-`ethornell-rs`. It uses the ABI from `Project-Shinkirou/ShinkiEMU@cf825f64`
-(Rust 1.99) and the build helper from `Project-Shinkirou/ShinkiEMU@9cd899ba`.
-The build script writes the target, profile and license inputs to
-`core-build.json`; Cargo builds the library.
+`ethornell-rs`. The ABI and build helper are pinned to
+`Project-Shinkirou/ShinkiEMU-CoreKit@58d00070ebe02030de1cde9e3d91abd696201067`.
+The build script records the target and license inputs in `core-build.json`;
+the fork's Cargo workflow builds and tests the adapter.
 
 Core-side changes for embedding are the shared standalone/embedded composition, the offscreen embedded frontend, typed host dialogs, per-runtime font discovery and session-owned audio shutdown in `ethornell-app`, `ethornell-render` and `ethornell-audio`.
 
@@ -90,8 +90,8 @@ host-driven `Embedded` frontend. It uses the same key mapping and game icon
 loader as the other native targets without linking the desktop window backend.
 On activation, `shinki.emu.android_context` v1 binds the host's process JavaVM
 and Application global reference to the core's `ndk-context` before core
-initialization. Kira audio retains CPAL/Oboe; the product wrapper selects the
-shared NDK C++ runtime.
+initialization. Kira audio retains CPAL/Oboe and the adapter selects the shared
+NDK C++ runtime independently of the product wrapper.
 
 The adapter probe checks the candidate directory's own `system.arc` for a
 readable `ipl._bp`. The archive name is matched case-insensitively so the
